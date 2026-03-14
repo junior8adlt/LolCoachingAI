@@ -9,6 +9,7 @@ import { analyzeVision } from './visionTracker';
 import { analyzePlayerDeath, detectDeathPatterns, type DeathAnalysisResult } from './deathAnalyzer';
 import { getChampionPowerSpikeTip, getChampionTradingTip, getChampionCoaching, getChampionCombo } from '../data/championCoaching';
 import { getChampionMechanics } from '../data/championMechanics';
+import { getSmartCoachingTips } from './smartCoach';
 import { speakTip, speakRaw } from './voiceCoach';
 import { t } from './i18n';
 import type { AllGameData, GameEvent } from '../types/game';
@@ -140,9 +141,12 @@ async function processGameState(data: AllGameData): Promise<void> {
   store.updateThreats(analysisResult.threats);
   store.updateObjectives(analysisResult.objectives);
 
+  // Only push DANGER-level tips from the old analyzer (not the repetitive info/warnings)
   for (const tip of analysisResult.tips) {
-    store.addCoachingTip(tip);
-    speakTip(tip);
+    if (tip.priority === 'danger') {
+      store.addCoachingTip(tip);
+      speakTip(tip);
+    }
   }
 
   // ── Jungle Tracking ──
@@ -393,6 +397,13 @@ async function processGameState(data: AllGameData): Promise<void> {
         speakTip(tip);
       }
     }
+  }
+
+  // ── Smart Coach (the brain - opportunities, fights, builds) ──
+  const smartTips = getSmartCoachingTips(data, junglePrediction);
+  for (const tip of smartTips) {
+    store.addCoachingTip(tip);
+    speakTip(tip);
   }
 
   previousEvents = [...data.events.Events];

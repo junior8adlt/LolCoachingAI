@@ -30,7 +30,7 @@ const isDev = !app.isPackaged;
 // ── Current keybind config (synced from renderer) ──
 let keybinds = {
   toggleOverlay: "F9",
-  pushToTalk: "Mouse4",
+  pushToTalk: "Mouse5",
   toggleVoice: "F10",
 };
 
@@ -122,27 +122,12 @@ function registerGlobalShortcuts(): void {
     }
   }
 
-  // Push-to-talk (keyboard keys only - mouse handled by polling)
-  if (!pttKey.startsWith("Mouse")) {
-    try {
-      globalShortcut.register(normalizeForElectron(pttKey), () => {
-        mainWindow?.webContents.send("global-key", "pushToTalk-down");
-      });
-    } catch (e) {
-      console.error(`Failed to register PTT shortcut "${pttKey}":`, e);
-    }
-  }
+  // Push-to-talk: handled by iohook (supports both keydown AND keyup)
+  // No need for globalShortcut for PTT - iohook handles it with proper hold mode
+  console.log(`[Hotkey] PTT "${pttKey}" will be handled by iohook (hold mode)`);
 
-  // Start mouse button polling if any bind uses mouse
-  if (
-    overlayKey.startsWith("Mouse") ||
-    voiceKey.startsWith("Mouse") ||
-    pttKey.startsWith("Mouse")
-  ) {
-    startMousePolling();
-  } else {
-    stopMousePolling();
-  }
+  // Start iohook for PTT (handles both mouse buttons and keyboard with keyup)
+  startMousePolling();
 }
 
 function unregisterGlobalShortcuts(): void {
@@ -157,80 +142,102 @@ function normalizeForElectron(key: string): string {
     .replace("Meta+", "Super+");
 }
 
-// ── Mouse Button Polling ──
-// Uses a SINGLE persistent PowerShell process that loops internally.
-// This avoids spawning a new process every tick (which killed performance).
+// ── Global Input Hook (iohook) ──
+// Captures keyboard AND mouse buttons globally, including keyup.
+// Works even when game has focus. No PowerShell polling needed.
 
-import { spawn, type ChildProcess } from "child_process";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
 
-const VK_XBUTTON1 = 0x05; // Mouse4
-const VK_XBUTTON2 = 0x06; // Mouse5
+let iohookInstance: any = null;
+let pttMouseDown = false;
+let pttKeyDown = false;
 
-function mouseNameToVK(name: string): number | null {
+// Map our bind names to iohook button/key codes
+function getIohookMouseButton(name: string): number | null {
   switch (name) {
-    case "Mouse4": return VK_XBUTTON1;
-    case "Mouse5": return VK_XBUTTON2;
+    case "Mouse4": return 4;
+    case "Mouse5": return 5;
+    case "MouseMiddle": return 2;
     default: return null;
   }
 }
 
-let pttMouseDown = false;
-let pollProcess: ChildProcess | null = null;
+// Map key names to iohook keycodes (common ones)
+const KEY_TO_IOHOOK: Record<string, number> = {
+  F1: 59, F2: 60, F3: 61, F4: 62, F5: 63, F6: 64,
+  F7: 65, F8: 66, F9: 67, F10: 68, F11: 87, F12: 88,
+  Escape: 1, Tab: 15, Space: 57,
+  "1": 2, "2": 3, "3": 4, "4": 5, "5": 6,
+  "6": 7, "7": 8, "8": 9, "9": 10, "0": 11,
+  Q: 16, W: 17, E: 18, R: 19, T: 20, Y: 21, U: 22, I: 23, O: 24, P: 25,
+  A: 30, S: 31, D: 32, F: 33, G: 34, H: 35, J: 36, K: 37, L: 38,
+  Z: 44, X: 45, C: 46, V: 47, B: 48, N: 49, M: 50,
+};
 
 function startMousePolling(): void {
-  if (mousePoller || pollProcess) return;
+  if (iohookInstance) return;
 
-  const pttBind = keybinds.pushToTalk;
-  const pttVK = mouseNameToVK(pttBind);
-  if (!pttVK) {
-    console.log("[Main] PTT not bound to mouse, skipping mouse polling");
-    return;
+  try {
+    const iohook = require("@tkomde/iohook");
+    iohookInstance = iohook;
+
+    const pttBind = keybinds.pushToTalk;
+    const isMouseBind = pttBind.startsWith("Mouse");
+
+    if (isMouseBind) {
+      const targetButton = getIohookMouseButton(pttBind);
+      if (!targetButton) {
+        console.log(`[iohook] Unknown mouse button: ${pttBind}`);
+        return;
+      }
+
+      console.log(`[iohook] Listening for ${pttBind} (button ${targetButton})`);
+
+      iohook.on("mousedown", (event: { button: number }) => {
+        if (event.button === targetButton && !pttMouseDown) {
+          pttMouseDown = true;
+          console.log(`[iohook] ${pttBind} DOWN`);
+          mainWindow?.webContents.send("global-key", "pushToTalk-down");
+        }
+      });
+
+      iohook.on("mouseup", (event: { button: number }) => {
+        if (event.button === targetButton && pttMouseDown) {
+          pttMouseDown = false;
+          console.log(`[iohook] ${pttBind} UP`);
+          mainWindow?.webContents.send("global-key", "pushToTalk-up");
+        }
+      });
+    } else {
+      // Keyboard PTT with keyup support via iohook
+      const keycode = KEY_TO_IOHOOK[pttBind];
+      if (keycode) {
+        console.log(`[iohook] Listening for ${pttBind} (keycode ${keycode}) with keyup`);
+
+        iohook.on("keydown", (event: { keycode: number }) => {
+          if (event.keycode === keycode && !pttKeyDown) {
+            pttKeyDown = true;
+            mainWindow?.webContents.send("global-key", "pushToTalk-down");
+          }
+        });
+
+        iohook.on("keyup", (event: { keycode: number }) => {
+          if (event.keycode === keycode && pttKeyDown) {
+            pttKeyDown = false;
+            mainWindow?.webContents.send("global-key", "pushToTalk-up");
+          }
+        });
+      }
+    }
+
+    iohook.start();
+    console.log("[iohook] Global input hook started");
+
+  } catch (err) {
+    console.error("[iohook] Failed to start:", err);
+    console.log("[iohook] Push-to-talk may not work for mouse buttons. Use a keyboard key instead.");
   }
-
-  console.log(`[Main] Starting persistent mouse poll for ${pttBind} (VK=${pttVK})`);
-
-  // Spawn ONE persistent PowerShell that polls in a loop and outputs state changes
-  const script = `
-    Add-Type -MemberDefinition '[DllImport("user32.dll")]public static extern short GetAsyncKeyState(int vKey);' -Name W -Namespace U
-    $prev = 0
-    while($true) {
-      $state = [U.W]::GetAsyncKeyState(${pttVK})
-      $down = if($state -lt 0){1}else{0}
-      if($down -ne $prev) {
-        $prev = $down
-        Write-Output $down
-        [Console]::Out.Flush()
-      }
-      Start-Sleep -Milliseconds 80
-    }
-  `;
-
-  pollProcess = spawn("powershell", ["-NoProfile", "-NoLogo", "-Command", script], {
-    stdio: ["ignore", "pipe", "ignore"],
-    windowsHide: true,
-  });
-
-  pollProcess.stdout?.setEncoding("utf8");
-  pollProcess.stdout?.on("data", (data: string) => {
-    const lines = data.trim().split(/\r?\n/);
-    for (const line of lines) {
-      const val = parseInt(line.trim(), 10);
-      if (val === 1 && !pttMouseDown) {
-        pttMouseDown = true;
-        console.log(`[Main] ${pttBind} DOWN`);
-        mainWindow?.webContents.send("global-key", "pushToTalk-down");
-      } else if (val === 0 && pttMouseDown) {
-        pttMouseDown = false;
-        console.log(`[Main] ${pttBind} UP`);
-        mainWindow?.webContents.send("global-key", "pushToTalk-up");
-      }
-    }
-  });
-
-  pollProcess.on("exit", () => {
-    pollProcess = null;
-    console.log("[Main] Mouse poll process exited");
-  });
 }
 
 function stopMousePolling(): void {
@@ -238,11 +245,14 @@ function stopMousePolling(): void {
     clearInterval(mousePoller);
     mousePoller = null;
   }
-  if (pollProcess) {
-    pollProcess.kill();
-    pollProcess = null;
+  if (iohookInstance) {
+    try {
+      iohookInstance.stop();
+    } catch { /* ignore */ }
+    iohookInstance = null;
   }
   pttMouseDown = false;
+  pttKeyDown = false;
 }
 
 // ── Overlay toggle ──
@@ -417,6 +427,17 @@ app.on("certificate-error", (event, _webContents, url, _error, _cert, callback) 
 });
 
 app.whenReady().then(() => {
+  // Grant microphone permission for voice input (SpeechRecognition)
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    const allowed = ['media', 'mediaKeySystem', 'midi', 'notifications', 'audioCapture'];
+    callback(allowed.includes(permission));
+  });
+
+  // Also grant via permission check handler
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return permission === 'media' || (permission as string) === 'audioCapture';
+  });
+
   // Trust Riot's self-signed cert on 127.0.0.1 for renderer fetch()
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
     if (request.hostname === "127.0.0.1") {

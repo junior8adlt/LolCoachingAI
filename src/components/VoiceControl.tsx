@@ -41,23 +41,39 @@ export function VoiceControl() {
   // Listen for global hotkeys from Electron main process (works when game has focus)
   useEffect(() => {
     return onGlobalKey((action: string) => {
+      // Toggle mode (keyboard): press once to start, press again to stop
+      if (action === 'pushToTalk-toggle') {
+        if (holdingRef.current) {
+          holdingRef.current = false;
+          setIsHolding(false);
+          stopListening();
+        } else {
+          holdingRef.current = true;
+          setIsHolding(true);
+          startListening();
+          // Auto-stop after 15s if user forgets
+          setTimeout(() => {
+            if (holdingRef.current) {
+              holdingRef.current = false;
+              setIsHolding(false);
+              stopListening();
+            }
+          }, 15000);
+        }
+      }
+      // Hold mode (mouse buttons): down to start, up to stop
       if (action === 'pushToTalk-down' && !holdingRef.current) {
         holdingRef.current = true;
         setIsHolding(true);
         startListening();
-        // Auto-stop after 10s max (safety)
-        setTimeout(() => {
-          if (holdingRef.current) {
-            holdingRef.current = false;
-            setIsHolding(false);
-            stopListening();
-          }
-        }, 10000);
       }
       if (action === 'pushToTalk-up' && holdingRef.current) {
-        holdingRef.current = false;
-        setIsHolding(false);
-        stopListening();
+        // Small delay to let SpeechRecognition capture the last words
+        setTimeout(() => {
+          holdingRef.current = false;
+          setIsHolding(false);
+          stopListening();
+        }, 500);
       }
       if (action === 'toggleVoice') {
         const next = !isVoiceEnabled();

@@ -92,8 +92,32 @@ function createRecognition(): SpeechRecognition | null {
   return rec;
 }
 
-export function startListening(): void {
+let micPermissionGranted = false;
+
+async function ensureMicPermission(): Promise<boolean> {
+  if (micPermissionGranted) return true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Stop the stream immediately, we just need the permission
+    stream.getTracks().forEach((t) => t.stop());
+    micPermissionGranted = true;
+    console.log('[VoiceInput] Microphone permission granted');
+    return true;
+  } catch (err) {
+    console.error('[VoiceInput] Microphone permission denied:', err);
+    return false;
+  }
+}
+
+export async function startListening(): Promise<void> {
   if (currentState.isListening || currentState.isProcessing) return;
+
+  // Ensure mic permission first
+  const hasMic = await ensureMicPermission();
+  if (!hasMic) {
+    speakRaw(getLanguage() === 'es' ? 'No tengo acceso al microfono.' : 'No microphone access.');
+    return;
+  }
 
   // Recreate to pick up language changes
   recognition = createRecognition();
@@ -110,7 +134,9 @@ export function startListening(): void {
 
   try {
     recognition.start();
-  } catch {
+    console.log('[VoiceInput] Listening started');
+  } catch (err) {
+    console.error('[VoiceInput] Failed to start:', err);
     updateState({ isListening: false });
   }
 }
