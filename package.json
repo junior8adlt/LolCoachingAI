@@ -6,6 +6,8 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && tsc -p electron/tsconfig.json && electron .\"",
+    "backend": "cd backend && python main.py",
+    "start": "concurrently -n ui,backend,electron -c blue,green,magenta \"vite\" \"cd backend && python main.py\" \"wait-on http://localhost:5173 && tsc -p electron/tsconfig.json && electron .\"",
     "build": "tsc -p electron/tsconfig.json && vite build && electron-builder",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit"

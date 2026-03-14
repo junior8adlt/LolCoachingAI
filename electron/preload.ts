@@ -1,18 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-export interface ElectronAPI {
-  toggleOverlay: () => Promise<boolean>;
-  minimize: () => Promise<void>;
-  setClickThrough: (enabled: boolean) => Promise<boolean>;
-  getOverlayState: () => Promise<{
-    isVisible: boolean;
-    isClickThrough: boolean;
-  }>;
-  onOverlayToggled: (callback: (visible: boolean) => void) => () => void;
-  onClickThroughChanged: (callback: (enabled: boolean) => void) => () => void;
-  onGameStateUpdate: (callback: (state: unknown) => void) => () => void;
-}
-
 contextBridge.exposeInMainWorld("electronAPI", {
   toggleOverlay: () => ipcRenderer.invoke("toggle-overlay"),
 
@@ -43,4 +30,4 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("game-state-update", handler);
     return () => ipcRenderer.removeListener("game-state-update", handler);
   },
-} satisfies ElectronAPI);
+});
