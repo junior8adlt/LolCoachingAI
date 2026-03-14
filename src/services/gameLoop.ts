@@ -3,6 +3,8 @@ import { getAllGameData, isGameRunning } from './riotApi';
 import { analyzeGameState } from './gameAnalyzer';
 import { getCoachingAdvice, getMatchupAnalysis, generatePostGameCoaching } from './aiCoach';
 import { updateTracking } from './jungleTracker';
+import { speakTip, speakRaw } from './voiceCoach';
+import { t } from './i18n';
 import type { AllGameData, GameEvent } from '../types/game';
 import type { GamePhase } from '../types/coaching';
 
@@ -34,6 +36,7 @@ function onGameStart(): void {
   latestGameData = null;
   wasGameRunning = true;
 
+  speakRaw(t('ui_analyzing_matchup'));
   console.log('[GameLoop] Game started. Initializing coaching session.');
 }
 
@@ -77,6 +80,7 @@ async function processGameState(data: AllGameData): Promise<void> {
 
   for (const tip of analysisResult.tips) {
     store.addCoachingTip(tip);
+    speakTip(tip);
   }
 
   const junglePrediction = updateTracking(
@@ -129,6 +133,7 @@ async function sendToAICoach(data: AllGameData): Promise<void> {
     const tips = await getCoachingAdvice(data);
     for (const tip of tips) {
       store.addCoachingTip(tip);
+      speakTip(tip);
     }
     store.setAIState({ status: 'coaching', currentThought: 'Analysis complete.' });
   } catch (error) {

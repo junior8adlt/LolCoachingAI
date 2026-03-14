@@ -7,6 +7,7 @@ import { JungleTracker } from './JungleTracker';
 import { ObjectiveTimers } from './ObjectiveTimers';
 import { MatchupAnalysis } from './MatchupAnalysis';
 import { PostGameReport } from './PostGameReport';
+import { VoiceControl } from './VoiceControl';
 
 export function Overlay() {
   const gamePhase = useGameStore((s) => s.gamePhase);
@@ -45,6 +46,11 @@ export function Overlay() {
       {/* Center-bottom: Coaching Tip Panel */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-auto animate-slide-in-up">
         <CoachingTipPanel />
+      </div>
+
+      {/* Right-center: Voice Control (Mic + TTS toggle) */}
+      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-auto">
+        <VoiceControl />
       </div>
 
       {/* Matchup Analysis - shows during loading/early game */}

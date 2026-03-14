@@ -339,6 +339,53 @@ class AICoach:
             return PostGameResponse(summary=f"Error generating report: {exc}")
 
 
+    async def answer_question(
+        self, question: str, game_state: GameState, language: str = "es"
+    ) -> dict[str, Any]:
+        """Answer a player's voice question about the game."""
+        summary = game_state.to_summary()
+
+        lang_instruction = (
+            "Responde en espanol de forma natural y directa, como un coach de LoL hablando con su jugador. "
+            "Usa lenguaje casual de gaming (farmear, tradear, pushear, wardear, etc). "
+            "Maximo 2 oraciones cortas."
+            if language == "es"
+            else "Answer in English, short and direct like a real coach. Max 2 short sentences."
+        )
+
+        user_msg = json.dumps(
+            {
+                "player_question": question,
+                "game_state": summary,
+                "instruction": lang_instruction,
+            },
+            indent=2,
+        )
+
+        try:
+            response = await self._client.messages.create(
+                model=AI_MODEL,
+                max_tokens=200,
+                system=(
+                    "You are a Challenger-level League of Legends coach. "
+                    "A player is asking you a question during a live game. "
+                    "Your answer will be spoken aloud, so keep it VERY short and natural. "
+                    "NO JSON, just plain text. Like a friend coaching you."
+                ),
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            answer = response.content[0].text.strip()
+            return {"answer": answer}
+        except Exception as exc:
+            logger.error("Voice question error: %s", exc, exc_info=True)
+            fallback = (
+                "No puedo responder ahora, concentrate en el juego."
+                if language == "es"
+                else "Can't answer right now, focus on the game."
+            )
+            return {"answer": fallback}
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     """Extract JSON from AI response, handling markdown code blocks."""
     text = text.strip()

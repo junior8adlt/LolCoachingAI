@@ -208,6 +208,21 @@ async def jungle_prediction(request: JunglePredictionRequest) -> JunglePredictio
     return await ai_coach.predict_jungle(state, request.events)
 
 
+@app.post("/api/coaching/ask")
+async def ask_coach(request: dict[str, Any]) -> dict[str, Any]:
+    """Voice question endpoint - player asks the AI coach a question."""
+    question = request.get("question", "")
+    language = request.get("language", "es")
+    game_state_raw = request.get("game_state", {})
+
+    try:
+        state = GameState(**game_state_raw) if game_state_raw else GameState()
+    except Exception:
+        state = GameState()
+
+    return await ai_coach.answer_question(question, state, language)
+
+
 @app.post("/api/coaching/post-game", response_model=PostGameResponse)
 async def post_game_report(request: PostGameRequest) -> PostGameResponse:
     return await ai_coach.generate_post_game_report(
