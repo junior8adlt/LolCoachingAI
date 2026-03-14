@@ -74,7 +74,7 @@ function App() {
               </span>
             </div>
             <div className="mt-4 text-[10px] text-gray-600">
-              Press <kbd className="px-1.5 py-0.5 rounded bg-gaming-surface text-gray-400 border border-gaming-border">F1</kbd> to toggle overlay
+              Press <kbd className="px-1.5 py-0.5 rounded bg-gaming-surface text-gray-400 border border-gaming-border">F9</kbd> to toggle overlay
             </div>
           </div>
         </div>

@@ -294,6 +294,10 @@ export async function generatePostGameCoaching(
   return generatePostGameReport(gameData, gameData.events.Events);
 }
 
+export async function checkBackendSource(): Promise<'claude' | 'local'> {
+  return (await isBackendAvailable()) ? 'claude' : 'local';
+}
+
 export const aiCoach = {
   getCoachingAdvice,
   getMatchupAnalysis,

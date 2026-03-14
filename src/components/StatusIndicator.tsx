@@ -1,4 +1,5 @@
 import { useGameStore } from '../stores/gameStore';
+import { getKeybindLabel } from '../services/keybinds';
 import type { AIStatusType, GamePhase } from '../types/coaching';
 
 const PHASE_LABELS: Record<GamePhase, { text: string; color: string }> = {
@@ -79,7 +80,7 @@ export function StatusIndicator() {
         {/* Overlay toggle indicator */}
         <div className="flex items-center gap-1">
           <span className={`text-[8px] data-text ${overlayVisible ? 'text-gaming-neon-blue' : 'text-gray-600'}`}>
-            {overlayVisible ? 'F1:ON' : 'F1:OFF'}
+            {overlayVisible ? `${getKeybindLabel('toggleOverlay')}:ON` : `${getKeybindLabel('toggleOverlay')}:OFF`}
           </span>
         </div>
       </div>

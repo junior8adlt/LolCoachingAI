@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("update-keybinds", binds),
   getKeybinds: () => ipcRenderer.invoke("get-keybinds"),
 
+  // Force overlay on top when game detected
+  forceOverlayShow: () => ipcRenderer.invoke("force-overlay-show"),
+
+  // Riot API proxy (bypasses SSL cert issues)
+  riotApiFetch: (endpoint: string) => ipcRenderer.invoke("riot-api-fetch", endpoint),
+
   // Listen for global hotkeys fired from main process
   onGlobalKey: (callback: (action: string) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, action: string) =>

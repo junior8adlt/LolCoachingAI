@@ -8,10 +8,35 @@ import type {
   Scores,
 } from '../types/game';
 
+// ── Riot API client ──
+// Uses Electron IPC proxy to bypass SSL cert issues.
+// Falls back to direct fetch if not in Electron.
+
+interface ElectronRiotAPI {
+  riotApiFetch?: (endpoint: string) => Promise<{ ok: boolean; data?: unknown; error?: string }>;
+}
+
+function getElectronAPI(): ElectronRiotAPI | null {
+  return (window as unknown as { electronAPI?: ElectronRiotAPI }).electronAPI ?? null;
+}
+
 const BASE_URL = 'https://127.0.0.1:2999';
 const REQUEST_TIMEOUT = 3000;
 
 async function riotFetch<T>(endpoint: string): Promise<T> {
+  // Try Electron IPC proxy first (bypasses SSL)
+  const api = getElectronAPI();
+  if (api?.riotApiFetch) {
+    console.log(`[RiotAPI] IPC proxy -> ${endpoint}`);
+    const result = await api.riotApiFetch(endpoint);
+    if (!result.ok) {
+      throw new RiotApiError(result.error ?? 'Riot API error', 0);
+    }
+    return result.data as T;
+  }
+
+  // Fallback: direct fetch (works in browser dev, may fail SSL in Electron)
+  console.log(`[RiotAPI] No IPC, using direct fetch -> ${endpoint}`);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
@@ -19,9 +44,7 @@ async function riotFetch<T>(endpoint: string): Promise<T> {
     const response = await fetch(`${BASE_URL}${endpoint}`, {
       method: 'GET',
       signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-      },
+      headers: { Accept: 'application/json' },
     });
 
     if (!response.ok) {
@@ -33,9 +56,7 @@ async function riotFetch<T>(endpoint: string): Promise<T> {
 
     return (await response.json()) as T;
   } catch (error: unknown) {
-    if (error instanceof RiotApiError) {
-      throw error;
-    }
+    if (error instanceof RiotApiError) throw error;
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new RiotApiError('Request timed out', 408);
     }

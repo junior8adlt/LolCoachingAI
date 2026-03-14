@@ -1,7 +1,7 @@
 import { useGameStore } from '../stores/gameStore';
 import { getAllGameData, isGameRunning } from './riotApi';
 import { analyzeGameState } from './gameAnalyzer';
-import { getCoachingAdvice, getMatchupAnalysis, generatePostGameCoaching } from './aiCoach';
+import { getCoachingAdvice, getMatchupAnalysis, generatePostGameCoaching, checkBackendSource } from './aiCoach';
 import { updateTracking } from './jungleTracker';
 import { speakTip, speakRaw } from './voiceCoach';
 import { t } from './i18n';
@@ -25,11 +25,24 @@ function determineGamePhase(gameTime: number): GamePhase {
   return 'LATE_GAME';
 }
 
+function notifyElectron(event: string): void {
+  const api = (window as unknown as Record<string, unknown>).electronAPI as
+    | { forceOverlayShow?: () => Promise<void>; forceOverlayHide?: () => Promise<void> }
+    | undefined;
+  if (event === 'game-start' && api?.forceOverlayShow) {
+    api.forceOverlayShow();
+  }
+}
+
 function onGameStart(): void {
   const store = useGameStore.getState();
   store.reset();
   store.setGamePhase('LOADING');
   store.setAIState({ status: 'analyzing', currentThought: 'Game detected. Initializing analysis...', reasoningChain: [] });
+
+  // Force overlay visible and on top
+  if (!store.overlayVisible) store.toggleOverlay();
+  notifyElectron('game-start');
 
   previousEvents = [];
   lastAICoachTime = 0;
@@ -127,7 +140,8 @@ async function sendToAICoach(data: AllGameData): Promise<void> {
   }
 
   lastAICoachTime = now;
-  store.setAIState({ status: 'thinking', currentThought: 'Analyzing game state...' });
+  const source = await checkBackendSource();
+  store.setAIState({ status: 'thinking', currentThought: 'Analyzing game state...', source });
 
   try {
     const tips = await getCoachingAdvice(data);
@@ -135,7 +149,7 @@ async function sendToAICoach(data: AllGameData): Promise<void> {
       store.addCoachingTip(tip);
       speakTip(tip);
     }
-    store.setAIState({ status: 'coaching', currentThought: 'Analysis complete.' });
+    store.setAIState({ status: 'coaching', currentThought: 'Analysis complete.', source });
   } catch (error) {
     console.error('[GameLoop] AI coach error:', error);
     store.setAIState({ status: 'idle', currentThought: 'AI analysis unavailable.' });

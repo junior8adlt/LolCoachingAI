@@ -8,6 +8,7 @@ import { ObjectiveTimers } from './ObjectiveTimers';
 import { MatchupAnalysis } from './MatchupAnalysis';
 import { PostGameReport } from './PostGameReport';
 import { VoiceControl } from './VoiceControl';
+import { DraggablePanel } from './DraggablePanel';
 
 export function Overlay() {
   const gamePhase = useGameStore((s) => s.gamePhase);
@@ -19,48 +20,58 @@ export function Overlay() {
   return (
     <div className="absolute inset-0 pointer-events-none">
       {/* Top-left: AI Thinking Panel */}
-      <div className="absolute top-3 left-3 pointer-events-auto animate-slide-in-left">
-        <AIThinkingPanel />
+      <div className="absolute top-3 left-3 animate-slide-in-left">
+        <DraggablePanel id="ai-thinking">
+          <AIThinkingPanel />
+        </DraggablePanel>
       </div>
 
       {/* Top-right: Enemy Threat List */}
-      <div className="absolute top-3 right-3 pointer-events-auto animate-slide-in-right">
-        <EnemyThreatList />
+      <div className="absolute top-3 right-3 animate-slide-in-right">
+        <DraggablePanel id="enemy-threats">
+          <EnemyThreatList />
+        </DraggablePanel>
       </div>
 
       {/* Bottom-left: Farm Tracker + Jungle Tracker */}
-      <div className="absolute bottom-3 left-3 flex flex-col gap-2 pointer-events-auto">
-        <div className="animate-slide-in-left">
+      <div className="absolute bottom-3 left-3 flex flex-col gap-2">
+        <DraggablePanel id="farm-tracker">
           <FarmTracker />
-        </div>
-        <div className="animate-slide-in-left" style={{ animationDelay: '0.1s' }}>
+        </DraggablePanel>
+        <DraggablePanel id="jungle-tracker">
           <JungleTracker />
-        </div>
+        </DraggablePanel>
       </div>
 
       {/* Bottom-right: Objective Timers */}
-      <div className="absolute bottom-3 right-3 pointer-events-auto animate-slide-in-right">
-        <ObjectiveTimers />
+      <div className="absolute bottom-3 right-3 animate-slide-in-right">
+        <DraggablePanel id="objectives">
+          <ObjectiveTimers />
+        </DraggablePanel>
       </div>
 
       {/* Center-bottom: Coaching Tip Panel */}
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-auto animate-slide-in-up">
-        <CoachingTipPanel />
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 animate-slide-in-up">
+        <DraggablePanel id="coaching-tips">
+          <CoachingTipPanel />
+        </DraggablePanel>
       </div>
 
-      {/* Right-center: Voice Control (Mic + TTS toggle) */}
+      {/* Right-center: Voice Control */}
       <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-auto">
         <VoiceControl />
       </div>
 
-      {/* Matchup Analysis - shows during loading/early game */}
+      {/* Matchup Analysis */}
       {showMatchup && (
-        <div className="absolute top-14 left-3 pointer-events-auto animate-fade-in">
-          <MatchupAnalysis />
+        <div className="absolute top-14 left-3 animate-fade-in">
+          <DraggablePanel id="matchup">
+            <MatchupAnalysis />
+          </DraggablePanel>
         </div>
       )}
 
-      {/* Full-screen Post-game report */}
+      {/* Post-game report */}
       {gamePhase === 'POST_GAME' && postGameAnalysis && (
         <div className="absolute inset-0 pointer-events-auto">
           <PostGameReport />

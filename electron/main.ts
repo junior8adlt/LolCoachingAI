@@ -3,13 +3,18 @@ import {
   BrowserWindow,
   ipcMain,
   globalShortcut,
+  session,
   Tray,
   Menu,
   nativeImage,
   screen,
 } from "electron";
 import path from "path";
+import https from "https";
 import { fileURLToPath } from "url";
+
+// Allow Riot's self-signed SSL cert
+app.commandLine.appendSwitch("ignore-certificate-errors");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,9 +29,9 @@ const isDev = !app.isPackaged;
 
 // ── Current keybind config (synced from renderer) ──
 let keybinds = {
-  toggleOverlay: "F1",
+  toggleOverlay: "F9",
   pushToTalk: "Mouse4",
-  toggleVoice: "F3",
+  toggleVoice: "F10",
 };
 
 function createWindow(): void {
@@ -48,7 +53,7 @@ function createWindow(): void {
     focusable: false, // Don't steal focus from the game
     type: "toolbar",   // Helps with game overlay on Windows
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "../electron/preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -65,6 +70,7 @@ function createWindow(): void {
 
   if (isDev) {
     mainWindow.loadURL("http://localhost:5173");
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
@@ -73,12 +79,13 @@ function createWindow(): void {
     mainWindow = null;
   });
 
-  // Periodically re-assert alwaysOnTop (some games reset it)
+  // Periodically re-assert alwaysOnTop (games can reset window z-order)
   setInterval(() => {
     if (mainWindow && isOverlayVisible && !mainWindow.isDestroyed()) {
       mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+      mainWindow.moveTop();
     }
-  }, 3000);
+  }, 2000);
 }
 
 // ── Global Shortcuts ──
@@ -94,11 +101,13 @@ function registerGlobalShortcuts(): void {
   // Toggle overlay
   if (!overlayKey.startsWith("Mouse")) {
     try {
-      globalShortcut.register(normalizeForElectron(overlayKey), () => {
+      const ok = globalShortcut.register(normalizeForElectron(overlayKey), () => {
+        console.log(`[Hotkey] ${overlayKey} pressed -> toggle overlay`);
         toggleOverlay();
       });
+      console.log(`[Hotkey] Register ${overlayKey}: ${ok ? "SUCCESS" : "FAILED"}`);
     } catch (e) {
-      console.error(`Failed to register overlay shortcut "${overlayKey}":`, e);
+      console.error(`[Hotkey] Failed to register "${overlayKey}":`, e);
     }
   }
 
@@ -149,12 +158,13 @@ function normalizeForElectron(key: string): string {
 }
 
 // ── Mouse Button Polling ──
-// Electron doesn't have global mouse button events, so we poll
-// Windows API GetAsyncKeyState for mouse side buttons
+// Uses child_process to call a tiny C# snippet via PowerShell
+// that reads GetAsyncKeyState for mouse XButtons
 
-// Virtual key codes for mouse buttons
-const VK_XBUTTON1 = 0x05; // Mouse4 (back)
-const VK_XBUTTON2 = 0x06; // Mouse5 (forward)
+import { execSync } from "child_process";
+
+const VK_XBUTTON1 = 0x05; // Mouse4
+const VK_XBUTTON2 = 0x06; // Mouse5
 
 function mouseNameToVK(name: string): number | null {
   switch (name) {
@@ -164,39 +174,46 @@ function mouseNameToVK(name: string): number | null {
   }
 }
 
+function isMouseButtonDown(vk: number): boolean {
+  try {
+    const result = execSync(
+      `powershell -NoProfile -Command "Add-Type -MemberDefinition '[DllImport(\\\"user32.dll\\\")]public static extern short GetAsyncKeyState(int vKey);' -Name W -Namespace U; [U.W]::GetAsyncKeyState(${vk})"`,
+      { timeout: 200, windowsHide: true, encoding: "utf8" }
+    );
+    // If high bit is set (negative short), button is currently pressed
+    return parseInt(result.trim(), 10) < 0;
+  } catch {
+    return false;
+  }
+}
+
 let pttMouseDown = false;
 
 function startMousePolling(): void {
   if (mousePoller) return;
 
-  // Try to load ffi for GetAsyncKeyState
-  // If not available, fall back to a note in the console
-  let getAsyncKeyState: ((vk: number) => number) | null = null;
-
-  try {
-    // Dynamic import of koffi or ffi-napi if available
-    // For now, use a simpler approach: poll via PowerShell is too slow,
-    // so we use Electron's built-in approach with a raw addon check
-    //
-    // Since we can't guarantee native modules, we use a polling approach
-    // that checks mouse state via the renderer's pointer events
-    console.log("[Main] Mouse button polling: using IPC bridge mode");
-  } catch {
-    console.log("[Main] Native mouse polling not available");
+  const pttBind = keybinds.pushToTalk;
+  const pttVK = mouseNameToVK(pttBind);
+  if (!pttVK) {
+    console.log("[Main] PTT not bound to mouse, skipping mouse polling");
+    return;
   }
 
-  // Fallback: The renderer will handle mouse buttons directly since
-  // the overlay window forwards mouse events. For global capture when
-  // game has focus, we instruct users to use keyboard keys or we
-  // provide a helper script.
-  //
-  // For Mouse4/Mouse5 to work IN-GAME, we'll create a tiny AHK-style
-  // bridge or use the raw input approach.
+  console.log(`[Main] Starting mouse polling for ${pttBind} (VK=${pttVK})`);
 
   mousePoller = setInterval(() => {
-    // This interval keeps the polling alive - actual mouse detection
-    // is handled via the preload bridge for now
-  }, 100);
+    const isDown = isMouseButtonDown(pttVK);
+
+    if (isDown && !pttMouseDown) {
+      pttMouseDown = true;
+      console.log(`[Main] ${pttBind} DOWN -> push-to-talk start`);
+      mainWindow?.webContents.send("global-key", "pushToTalk-down");
+    } else if (!isDown && pttMouseDown) {
+      pttMouseDown = false;
+      console.log(`[Main] ${pttBind} UP -> push-to-talk stop`);
+      mainWindow?.webContents.send("global-key", "pushToTalk-up");
+    }
+  }, 150);
 }
 
 function stopMousePolling(): void {
@@ -277,6 +294,27 @@ function createTray(): void {
   tray.on("click", () => toggleOverlay());
 }
 
+// ── Riot API proxy (Node.js https, bypasses SSL issues) ──
+
+function riotApiFetch(endpoint: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const url = `https://127.0.0.1:2999${endpoint}`;
+    const req = https.get(url, { rejectUnauthorized: false, timeout: 3000 }, (res) => {
+      let data = "";
+      res.on("data", (chunk: string) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          reject(new Error("Invalid JSON from Riot API"));
+        }
+      });
+    });
+    req.on("error", (err: Error) => reject(err));
+    req.on("timeout", () => { req.destroy(); reject(new Error("Timeout")); });
+  });
+}
+
 // ── IPC Handlers ──
 
 function registerIpcHandlers(): void {
@@ -299,6 +337,27 @@ function registerIpcHandlers(): void {
     isClickThrough,
   }));
 
+  // Game detected - aggressively force overlay on top
+  ipcMain.handle("force-overlay-show", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    isOverlayVisible = true;
+    mainWindow.show();
+    mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+    mainWindow.moveTop();
+    mainWindow.setIgnoreMouseEvents(true, { forward: true });
+    // Re-assert several times rapidly to beat the game's window management
+    const reassert = () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+        mainWindow.moveTop();
+      }
+    };
+    setTimeout(reassert, 500);
+    setTimeout(reassert, 1500);
+    setTimeout(reassert, 3000);
+    setTimeout(reassert, 5000);
+  });
+
   // Renderer tells us keybinds changed -> re-register global shortcuts
   ipcMain.handle("update-keybinds", (_event, newBinds: typeof keybinds) => {
     keybinds = { ...keybinds, ...newBinds };
@@ -308,11 +367,43 @@ function registerIpcHandlers(): void {
 
   // Renderer requests current keybinds
   ipcMain.handle("get-keybinds", () => keybinds);
+
+  // ── Riot API proxy calls ──
+  ipcMain.handle("riot-api-fetch", async (_event, endpoint: string) => {
+    try {
+      const data = await riotApiFetch(endpoint);
+      console.log(`[RiotProxy] OK: ${endpoint}`);
+      return { ok: true, data };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`[RiotProxy] FAIL: ${endpoint} -> ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
 }
 
 // ── App lifecycle ──
 
+// Accept Riot's self-signed SSL certificate on 127.0.0.1:2999
+app.on("certificate-error", (event, _webContents, url, _error, _cert, callback) => {
+  if (url.startsWith("https://127.0.0.1:2999")) {
+    event.preventDefault();
+    callback(true); // trust it
+  } else {
+    callback(false);
+  }
+});
+
 app.whenReady().then(() => {
+  // Trust Riot's self-signed cert on 127.0.0.1 for renderer fetch()
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    if (request.hostname === "127.0.0.1") {
+      callback(0); // Trust
+    } else {
+      callback(-2); // Use default Chromium verification
+    }
+  });
+
   registerIpcHandlers();
   createWindow();
   createTray();

@@ -74,6 +74,13 @@ export function AIThinkingPanel() {
             }`}
           />
           <span>AI Coach</span>
+          <span className={`text-[8px] ml-1 px-1 rounded ${
+            aiState.source === 'claude'
+              ? 'bg-gaming-neon-purple/20 text-gaming-neon-purple'
+              : 'bg-gaming-surface text-gray-500'
+          }`}>
+            {aiState.source === 'claude' ? 'Claude' : 'Local'}
+          </span>
         </div>
         <span className={`text-[9px] ${STATUS_COLORS[aiState.status]}`}>
           {STATUS_LABELS[aiState.status]}

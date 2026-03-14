@@ -52,6 +52,7 @@ const initialAIState: AIState = {
   status: 'idle',
   currentThought: '',
   reasoningChain: [],
+  source: 'local',
 };
 
 const initialState: GameStoreState = {
@@ -100,15 +101,30 @@ export const useGameStore = create<GameStore>((set) => ({
 
   addCoachingTip: (tip: CoachingTip) =>
     set((state) => {
+      // Block exact same message within 30s
       const isDuplicate = state.coachingTips.some(
         (existing) =>
           existing.message === tip.message &&
           !existing.dismissed &&
           tip.timestamp - existing.timestamp < 30000
       );
-      if (isDuplicate) {
-        return state;
-      }
+      if (isDuplicate) return state;
+
+      // Block same CATEGORY within 45s (prevents CS spam, recall spam, etc)
+      const CATEGORY_COOLDOWNS: Record<string, number> = {
+        farming: 60000,
+        recall: 45000,
+        positioning: 30000,
+        matchup: 90000,
+      };
+      const cooldown = CATEGORY_COOLDOWNS[tip.category] ?? 20000;
+      const categorySpam = state.coachingTips.some(
+        (existing) =>
+          existing.category === tip.category &&
+          !existing.dismissed &&
+          tip.timestamp - existing.timestamp < cooldown
+      );
+      if (categorySpam) return state;
       const activeTips = state.coachingTips.filter((t) => !t.dismissed);
       if (activeTips.length >= 5) {
         const oldest = activeTips.reduce((prev, curr) =>

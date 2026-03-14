@@ -117,10 +117,13 @@ export interface PostGameAnalysis {
 
 export type AIStatusType = 'idle' | 'thinking' | 'analyzing' | 'coaching';
 
+export type AISource = 'local' | 'claude';
+
 export interface AIState {
   status: AIStatusType;
   currentThought: string;
   reasoningChain: string[];
+  source: AISource;
 }
 
 export type GamePhase =

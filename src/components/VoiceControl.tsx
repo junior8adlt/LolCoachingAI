@@ -45,14 +45,19 @@ export function VoiceControl() {
         holdingRef.current = true;
         setIsHolding(true);
         startListening();
-        // Auto-stop after 8s max (safety)
+        // Auto-stop after 10s max (safety)
         setTimeout(() => {
           if (holdingRef.current) {
             holdingRef.current = false;
             setIsHolding(false);
             stopListening();
           }
-        }, 8000);
+        }, 10000);
+      }
+      if (action === 'pushToTalk-up' && holdingRef.current) {
+        holdingRef.current = false;
+        setIsHolding(false);
+        stopListening();
       }
       if (action === 'toggleVoice') {
         const next = !isVoiceEnabled();

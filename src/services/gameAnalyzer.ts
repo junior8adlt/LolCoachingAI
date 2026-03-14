@@ -82,17 +82,26 @@ export function analyzeFarming(
 
 export function analyzeThreats(
   enemies: PlayerInfo[],
-  _gameTime: number
+  _gameTime: number,
+  myPlayer?: PlayerInfo
 ): ThreatAssessment[] {
+  const myKills = myPlayer?.scores.kills ?? 0;
+  const myDeaths = myPlayer?.scores.deaths ?? 0;
+  const myKDA = myDeaths === 0 ? myKills : myKills / myDeaths;
+
   return enemies.map((enemy) => {
     const { kills, deaths, assists } = enemy.scores;
     const kda = deaths === 0 ? kills + assists : (kills + assists) / deaths;
     const totalGoldFromKills = kills * 300 + assists * 150;
 
+    // Compare relative to player - someone 2/1 isn't "fed" if you're 5/0
+    const isActuallyDangerous = kills >= 4 || (kda >= 3 && kills >= 3) || totalGoldFromKills >= 2500;
+    const isAheadOfMe = kda > myKDA + 1 && kills >= 3;
+
     let threatLevel: ThreatLevel = 'low';
-    if (kda >= 4 || kills >= 5 || totalGoldFromKills >= 2000) {
+    if (isActuallyDangerous || (isAheadOfMe && totalGoldFromKills >= 1500)) {
       threatLevel = 'high';
-    } else if (kda >= 2 || kills >= 3 || totalGoldFromKills >= 1000) {
+    } else if (kills >= 3 || (kda >= 2.5 && totalGoldFromKills >= 1000)) {
       threatLevel = 'medium';
     }
 
@@ -389,7 +398,10 @@ export function analyzeGameState(
     );
   }
 
-  const threats = analyzeThreats(enemies, gameTime);
+  const myPlayer = allPlayers.find(
+    (p) => p.summonerName === activePlayer.summonerName
+  );
+  const threats = analyzeThreats(enemies, gameTime, myPlayer);
 
   const highThreats = threats.filter((t) => t.threatLevel === 'high');
   for (const threat of highThreats) {
@@ -418,9 +430,6 @@ export function analyzeGameState(
     tips.push(createTip(recall.reason, 'warning', 'recall'));
   }
 
-  const myPlayer = allPlayers.find(
-    (p) => p.summonerName === activePlayer.summonerName
-  );
   if (myPlayer) {
     const laneOpponent = enemies.find(
       (e) => e.position === myPlayer.position && myPlayer.position !== ''

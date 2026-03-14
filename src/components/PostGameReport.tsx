@@ -1,3 +1,4 @@
+import React from 'react';
 import { useGameStore } from '../stores/gameStore';
 import type { PerformanceGrade, TipPriority } from '../types/coaching';
 
@@ -54,11 +55,27 @@ function formatMistakeTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// Disable click-through when report is showing so buttons work
+function useDisableClickThrough() {
+  const api = (window as unknown as { electronAPI?: { setClickThrough?: (v: boolean) => Promise<boolean> } }).electronAPI;
+
+  React.useEffect(() => {
+    // Disable click-through so we can click buttons
+    api?.setClickThrough?.(false);
+    return () => {
+      // Re-enable click-through when report closes
+      api?.setClickThrough?.(true);
+    };
+  }, [api]);
+}
+
 export function PostGameReport() {
   const postGameAnalysis = useGameStore((s) => s.postGameAnalysis);
   const setPostGameAnalysis = useGameStore((s) => s.setPostGameAnalysis);
   const setGamePhase = useGameStore((s) => s.setGamePhase);
   const reset = useGameStore((s) => s.reset);
+
+  useDisableClickThrough();
 
   if (!postGameAnalysis) return null;
 

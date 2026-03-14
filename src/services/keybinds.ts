@@ -10,9 +10,9 @@ export interface KeybindMap {
 const STORAGE_KEY = 'lolcoach_keybinds';
 
 const DEFAULT_KEYBINDS: KeybindMap = {
-  toggleOverlay: 'F1',
+  toggleOverlay: 'F9',       // F1-F5 are used by LoL
   pushToTalk: 'Mouse4',
-  toggleVoice: 'F3',
+  toggleVoice: 'F10',
 };
 
 let keybinds: KeybindMap = { ...DEFAULT_KEYBINDS };
@@ -35,7 +35,11 @@ function loadKeybinds(): void {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<KeybindMap>;
+      // Migrate old F1/F3 defaults that conflict with LoL
+      if (parsed.toggleOverlay === 'F1') parsed.toggleOverlay = DEFAULT_KEYBINDS.toggleOverlay;
+      if (parsed.toggleVoice === 'F3') parsed.toggleVoice = DEFAULT_KEYBINDS.toggleVoice;
       keybinds = { ...DEFAULT_KEYBINDS, ...parsed };
+      saveKeybinds(); // persist migration
     }
   } catch {
     keybinds = { ...DEFAULT_KEYBINDS };
