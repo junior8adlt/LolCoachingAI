@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-electron/
+release/
+.env
+*.pyc
+__pycache__/
+venv/
+.venv/
+*.log
+*.tsbuildinfo
+.vite/
