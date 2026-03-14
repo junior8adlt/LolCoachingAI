@@ -158,10 +158,10 @@ function normalizeForElectron(key: string): string {
 }
 
 // ── Mouse Button Polling ──
-// Uses child_process to call a tiny C# snippet via PowerShell
-// that reads GetAsyncKeyState for mouse XButtons
+// Uses a SINGLE persistent PowerShell process that loops internally.
+// This avoids spawning a new process every tick (which killed performance).
 
-import { execSync } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 
 const VK_XBUTTON1 = 0x05; // Mouse4
 const VK_XBUTTON2 = 0x06; // Mouse5
@@ -174,23 +174,11 @@ function mouseNameToVK(name: string): number | null {
   }
 }
 
-function isMouseButtonDown(vk: number): boolean {
-  try {
-    const result = execSync(
-      `powershell -NoProfile -Command "Add-Type -MemberDefinition '[DllImport(\\\"user32.dll\\\")]public static extern short GetAsyncKeyState(int vKey);' -Name W -Namespace U; [U.W]::GetAsyncKeyState(${vk})"`,
-      { timeout: 200, windowsHide: true, encoding: "utf8" }
-    );
-    // If high bit is set (negative short), button is currently pressed
-    return parseInt(result.trim(), 10) < 0;
-  } catch {
-    return false;
-  }
-}
-
 let pttMouseDown = false;
+let pollProcess: ChildProcess | null = null;
 
 function startMousePolling(): void {
-  if (mousePoller) return;
+  if (mousePoller || pollProcess) return;
 
   const pttBind = keybinds.pushToTalk;
   const pttVK = mouseNameToVK(pttBind);
@@ -199,21 +187,50 @@ function startMousePolling(): void {
     return;
   }
 
-  console.log(`[Main] Starting mouse polling for ${pttBind} (VK=${pttVK})`);
+  console.log(`[Main] Starting persistent mouse poll for ${pttBind} (VK=${pttVK})`);
 
-  mousePoller = setInterval(() => {
-    const isDown = isMouseButtonDown(pttVK);
-
-    if (isDown && !pttMouseDown) {
-      pttMouseDown = true;
-      console.log(`[Main] ${pttBind} DOWN -> push-to-talk start`);
-      mainWindow?.webContents.send("global-key", "pushToTalk-down");
-    } else if (!isDown && pttMouseDown) {
-      pttMouseDown = false;
-      console.log(`[Main] ${pttBind} UP -> push-to-talk stop`);
-      mainWindow?.webContents.send("global-key", "pushToTalk-up");
+  // Spawn ONE persistent PowerShell that polls in a loop and outputs state changes
+  const script = `
+    Add-Type -MemberDefinition '[DllImport("user32.dll")]public static extern short GetAsyncKeyState(int vKey);' -Name W -Namespace U
+    $prev = 0
+    while($true) {
+      $state = [U.W]::GetAsyncKeyState(${pttVK})
+      $down = if($state -lt 0){1}else{0}
+      if($down -ne $prev) {
+        $prev = $down
+        Write-Output $down
+        [Console]::Out.Flush()
+      }
+      Start-Sleep -Milliseconds 80
     }
-  }, 150);
+  `;
+
+  pollProcess = spawn("powershell", ["-NoProfile", "-NoLogo", "-Command", script], {
+    stdio: ["ignore", "pipe", "ignore"],
+    windowsHide: true,
+  });
+
+  pollProcess.stdout?.setEncoding("utf8");
+  pollProcess.stdout?.on("data", (data: string) => {
+    const lines = data.trim().split(/\r?\n/);
+    for (const line of lines) {
+      const val = parseInt(line.trim(), 10);
+      if (val === 1 && !pttMouseDown) {
+        pttMouseDown = true;
+        console.log(`[Main] ${pttBind} DOWN`);
+        mainWindow?.webContents.send("global-key", "pushToTalk-down");
+      } else if (val === 0 && pttMouseDown) {
+        pttMouseDown = false;
+        console.log(`[Main] ${pttBind} UP`);
+        mainWindow?.webContents.send("global-key", "pushToTalk-up");
+      }
+    }
+  });
+
+  pollProcess.on("exit", () => {
+    pollProcess = null;
+    console.log("[Main] Mouse poll process exited");
+  });
 }
 
 function stopMousePolling(): void {
@@ -221,6 +238,11 @@ function stopMousePolling(): void {
     clearInterval(mousePoller);
     mousePoller = null;
   }
+  if (pollProcess) {
+    pollProcess.kill();
+    pollProcess = null;
+  }
+  pttMouseDown = false;
 }
 
 // ── Overlay toggle ──

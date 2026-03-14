@@ -7,7 +7,8 @@ import { updateWaveState, getWaveCoachingTip, shouldRecallBasedOnWave } from './
 import { saveGameRecord, getProfileBasedTip, getPlayerProfile, classifyDeathCause } from './playerProfile';
 import { analyzeVision } from './visionTracker';
 import { analyzePlayerDeath, detectDeathPatterns, type DeathAnalysisResult } from './deathAnalyzer';
-import { getChampionPowerSpikeTip, getChampionTradingTip } from '../data/championCoaching';
+import { getChampionPowerSpikeTip, getChampionTradingTip, getChampionCoaching, getChampionCombo } from '../data/championCoaching';
+import { getChampionMechanics } from '../data/championMechanics';
 import { speakTip, speakRaw } from './voiceCoach';
 import { t } from './i18n';
 import type { AllGameData, GameEvent } from '../types/game';
@@ -301,22 +302,95 @@ async function processGameState(data: AllGameData): Promise<void> {
         store.addCoachingTip(tip);
         speakTip(tip);
       }
+
+      // At key levels, also give combo reminder
+      if ([2, 3, 6].includes(currentLevel)) {
+        const combo = getChampionCombo(myChampion);
+        if (combo) {
+          store.addCoachingTip({
+            id: `champ-combo-${now}`,
+            message: `Your combo: ${combo}`,
+            priority: 'info' as const,
+            category: 'matchup' as const,
+            timestamp: now,
+            dismissed: false,
+          });
+        }
+      }
     }
     lastPlayerLevel = currentLevel;
 
-    // Periodic champion trading tip (every 90s during laning)
-    if (gameTime < 900 && now - lastChampionTipTime > 90000) {
-      const tradeTip = getChampionTradingTip(myChampion, gameTime);
-      if (tradeTip) {
+    // Rotating champion tips: trading → mechanics → strategy (every 60s during laning)
+    if (gameTime < 900 && now - lastChampionTipTime > 60000) {
+      const tipCycle = Math.floor(gameTime / 60) % 3;
+      let tipMessage: string | null = null;
+
+      if (tipCycle === 0) {
+        // Trading pattern
+        tipMessage = getChampionTradingTip(myChampion, gameTime);
+      } else if (tipCycle === 1) {
+        // Mechanical tip
+        const mechanics = getChampionMechanics(myChampion);
+        if (mechanics) {
+          const allMechTips = [
+            ...mechanics.animationCancels,
+            ...mechanics.spacingTricks,
+            ...mechanics.advancedTips,
+          ];
+          if (allMechTips.length > 0) {
+            tipMessage = allMechTips[Math.floor(Math.random() * allMechTips.length)];
+          }
+        }
+      } else {
+        // Common mistake warning
+        const coaching = getChampionCoaching(myChampion);
+        if (coaching && coaching.commonMistakes.length > 0) {
+          tipMessage = `Avoid: ${coaching.commonMistakes[Math.floor(Math.random() * coaching.commonMistakes.length)]}`;
+        }
+      }
+
+      if (tipMessage) {
         store.addCoachingTip({
-          id: `champ-trade-${now}`,
-          message: tradeTip,
+          id: `champ-tip-${now}`,
+          message: tipMessage,
           priority: 'info' as const,
           category: 'matchup' as const,
           timestamp: now,
           dismissed: false,
         });
         lastChampionTipTime = now;
+      }
+    }
+
+    // Mid/late game strategy reminder (once per phase transition)
+    if (gameTime >= 900 && gameTime < 920) {
+      const coaching = getChampionCoaching(myChampion);
+      if (coaching) {
+        const tip = {
+          id: `champ-midgame-${now}`,
+          message: coaching.midGame,
+          priority: 'info' as const,
+          category: 'macro' as const,
+          timestamp: now,
+          dismissed: false,
+        };
+        store.addCoachingTip(tip);
+        speakTip(tip);
+      }
+    }
+    if (gameTime >= 1800 && gameTime < 1820) {
+      const coaching = getChampionCoaching(myChampion);
+      if (coaching) {
+        const tip = {
+          id: `champ-lategame-${now}`,
+          message: coaching.lateGame,
+          priority: 'info' as const,
+          category: 'macro' as const,
+          timestamp: now,
+          dismissed: false,
+        };
+        store.addCoachingTip(tip);
+        speakTip(tip);
       }
     }
   }
