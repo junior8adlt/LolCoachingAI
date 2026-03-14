@@ -3,6 +3,7 @@ import { useGameStore } from './stores/gameStore';
 import { Overlay } from './components/Overlay';
 import { StatusIndicator } from './components/StatusIndicator';
 import { startPolling, stopPolling } from './services/gameLoop';
+import { matchesKeybind, keyEventToName } from './services/keybinds';
 
 function App() {
   const gamePhase = useGameStore((s) => s.gamePhase);
@@ -12,7 +13,7 @@ function App() {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === 'F1') {
+      if (matchesKeybind('toggleOverlay', keyEventToName(e))) {
         e.preventDefault();
         toggleOverlay();
       }
@@ -34,6 +35,19 @@ function App() {
       stopPolling();
       pollingStarted.current = false;
     };
+  }, []);
+
+  // Listen for overlay toggle from Electron main process (global hotkey)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { onOverlayToggled?: (cb: (v: boolean) => void) => () => void } }).electronAPI;
+    if (api?.onOverlayToggled) {
+      return api.onOverlayToggled((visible: boolean) => {
+        const store = useGameStore.getState();
+        if (store.overlayVisible !== visible) {
+          store.toggleOverlay();
+        }
+      });
+    }
   }, []);
 
   const isInGame = gamePhase === 'EARLY_GAME' || gamePhase === 'MID_GAME' || gamePhase === 'LATE_GAME';

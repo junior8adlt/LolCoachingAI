@@ -2,13 +2,23 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("electronAPI", {
   toggleOverlay: () => ipcRenderer.invoke("toggle-overlay"),
-
   minimize: () => ipcRenderer.invoke("minimize"),
-
   setClickThrough: (enabled: boolean) =>
     ipcRenderer.invoke("set-clickthrough", enabled),
-
   getOverlayState: () => ipcRenderer.invoke("get-overlay-state"),
+
+  // Keybinds sync with main process
+  updateKeybinds: (binds: Record<string, string>) =>
+    ipcRenderer.invoke("update-keybinds", binds),
+  getKeybinds: () => ipcRenderer.invoke("get-keybinds"),
+
+  // Listen for global hotkeys fired from main process
+  onGlobalKey: (callback: (action: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: string) =>
+      callback(action);
+    ipcRenderer.on("global-key", handler);
+    return () => ipcRenderer.removeListener("global-key", handler);
+  },
 
   onOverlayToggled: (callback: (visible: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, visible: boolean) =>
@@ -22,12 +32,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
       callback(enabled);
     ipcRenderer.on("clickthrough-changed", handler);
     return () => ipcRenderer.removeListener("clickthrough-changed", handler);
-  },
-
-  onGameStateUpdate: (callback: (state: unknown) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: unknown) =>
-      callback(state);
-    ipcRenderer.on("game-state-update", handler);
-    return () => ipcRenderer.removeListener("game-state-update", handler);
   },
 });
