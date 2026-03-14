@@ -2,7 +2,12 @@ import { useGameStore } from '../stores/gameStore';
 import { getAllGameData, isGameRunning } from './riotApi';
 import { analyzeGameState } from './gameAnalyzer';
 import { getCoachingAdvice, getMatchupAnalysis, generatePostGameCoaching, checkBackendSource } from './aiCoach';
-import { updateTracking } from './jungleTracker';
+import { updateTracking, getJungleCoachingTip } from './jungleTracker';
+import { updateWaveState, getWaveCoachingTip, shouldRecallBasedOnWave } from './waveEngine';
+import { saveGameRecord, getProfileBasedTip, getPlayerProfile, classifyDeathCause } from './playerProfile';
+import { analyzeVision } from './visionTracker';
+import { analyzePlayerDeath, detectDeathPatterns, type DeathAnalysisResult } from './deathAnalyzer';
+import { getChampionPowerSpikeTip, getChampionTradingTip } from '../data/championCoaching';
 import { speakTip, speakRaw } from './voiceCoach';
 import { t } from './i18n';
 import type { AllGameData, GameEvent } from '../types/game';
@@ -17,6 +22,10 @@ let previousEvents: GameEvent[] = [];
 let wasGameRunning = false;
 let lastAICoachTime = 0;
 let latestGameData: AllGameData | null = null;
+let processedDeathEvents: Set<number> = new Set();
+let deathAnalyses: DeathAnalysisResult[] = [];
+let lastPlayerLevel = 0;
+let lastChampionTipTime = 0;
 
 function determineGamePhase(gameTime: number): GamePhase {
   if (gameTime <= 0) return 'LOADING';
@@ -47,6 +56,10 @@ function onGameStart(): void {
   previousEvents = [];
   lastAICoachTime = 0;
   latestGameData = null;
+  processedDeathEvents = new Set();
+  deathAnalyses = [];
+  lastPlayerLevel = 0;
+  lastChampionTipTime = 0;
   wasGameRunning = true;
 
   speakRaw(t('ui_analyzing_matchup'));
@@ -59,6 +72,41 @@ async function onGameEnd(): Promise<void> {
   store.setAIState({ status: 'analyzing', currentThought: 'Generating post-game report...' });
 
   if (latestGameData) {
+    // Save game record for player profile learning
+    try {
+      const ap = latestGameData.activePlayer;
+      const mp = latestGameData.allPlayers.find((p) => p.summonerName === ap.summonerName);
+      if (mp) {
+        const teamKills = latestGameData.allPlayers
+          .filter((p) => p.team === mp.team)
+          .reduce((sum, p) => sum + p.scores.kills, 0);
+        const duration = latestGameData.gameData.gameTime;
+        const deaths = latestGameData.events.Events
+          .filter((e) => e.EventName === 'ChampionKill' && e.VictimName === ap.summonerName);
+
+        saveGameRecord({
+          timestamp: Date.now(),
+          champion: mp.championName,
+          role: mp.position || 'NONE',
+          duration,
+          kills: mp.scores.kills,
+          deaths: mp.scores.deaths,
+          assists: mp.scores.assists,
+          cs: mp.scores.creepScore,
+          csPerMin: duration > 0 ? mp.scores.creepScore / (duration / 60) : 0,
+          visionScore: mp.scores.wardScore,
+          win: false, // Can't determine from API easily
+          deathCauses: deaths.map((d) => classifyDeathCause(d, latestGameData!.allPlayers)),
+          farmingEfficiency: store.farmingStats?.efficiency ?? 0,
+          killParticipation: teamKills > 0
+            ? ((mp.scores.kills + mp.scores.assists) / teamKills) * 100
+            : 0,
+        });
+      }
+    } catch (e) {
+      console.error('[GameLoop] Failed to save game record:', e);
+    }
+
     try {
       const analysis = await generatePostGameCoaching(latestGameData);
       store.setPostGameAnalysis(analysis);
@@ -96,6 +144,7 @@ async function processGameState(data: AllGameData): Promise<void> {
     speakTip(tip);
   }
 
+  // ── Jungle Tracking ──
   const junglePrediction = updateTracking(
     data.events.Events,
     gameTime,
@@ -103,26 +152,171 @@ async function processGameState(data: AllGameData): Promise<void> {
   );
   store.updateJunglePrediction(junglePrediction);
 
-  if (!store.matchupInfo && gameTime > 30) {
-    const myPlayer = data.allPlayers.find(
-      (p) => p.summonerName === data.activePlayer.summonerName
+  // Jungle coaching tip
+  const myPlayer = data.allPlayers.find(
+    (p) => p.summonerName === data.activePlayer.summonerName
+  );
+  const playerPos = myPlayer?.position?.toUpperCase();
+  const playerSide = playerPos === 'TOP' ? 'top' as const :
+    (playerPos === 'BOTTOM' || playerPos === 'UTILITY') ? 'bot' as const : 'mid' as const;
+
+  const jglTip = getJungleCoachingTip(junglePrediction, gameTime, playerSide);
+  if (jglTip) {
+    store.addCoachingTip(jglTip);
+    speakTip(jglTip);
+  }
+
+  // ── Wave Engine ──
+  const prevCS = previousEvents.length > 0 ? (store.farmingStats?.currentCS ?? 0) : 0;
+  const prevTime = previousEvents.length > 0 ? (latestGameData?.gameData.gameTime ?? 0) : 0;
+
+  const myTeam = myPlayer?.team;
+  const laneOpponent = myPlayer && myTeam ? data.allPlayers.find(
+    (p) => p.team !== myTeam && p.position === myPlayer.position
+  ) : undefined;
+
+  const waveInfo = updateWaveState(
+    gameTime,
+    analysisResult.farmingStats.currentCS,
+    prevCS,
+    prevTime,
+    data.events.Events,
+    myPlayer?.isDead ?? false,
+    laneOpponent?.isDead ?? false,
+    data.activePlayer.summonerName,
+    laneOpponent?.summonerName
+  );
+
+  const waveTip = getWaveCoachingTip(waveInfo, gameTime, store.objectives);
+  if (waveTip) {
+    store.addCoachingTip(waveTip);
+    speakTip(waveTip);
+  }
+
+  // Wave-aware recall suggestion
+  const waveRecall = shouldRecallBasedOnWave(
+    waveInfo,
+    data.activePlayer.currentGold,
+    data.activePlayer.championStats.currentHealth / data.activePlayer.championStats.maxHealth
+  );
+  if (waveRecall.canRecall && data.activePlayer.currentGold >= 1000) {
+    const recallTip = {
+      id: `wave-recall-${Date.now()}`,
+      message: waveRecall.reason,
+      priority: 'info' as const,
+      category: 'recall' as const,
+      timestamp: Date.now(),
+      dismissed: false,
+    };
+    store.addCoachingTip(recallTip);
+  }
+
+  // ── Vision Awareness ──
+  const visionAnalysis = analyzeVision(data, junglePrediction, gameTime);
+  for (const vTip of visionAnalysis.tips) {
+    store.addCoachingTip(vTip);
+    speakTip(vTip);
+  }
+
+  // ── Death Analysis ──
+  const myDeaths = data.events.Events.filter(
+    (e) => e.EventName === 'ChampionKill' &&
+      e.VictimName === data.activePlayer.summonerName &&
+      !processedDeathEvents.has(e.EventID)
+  );
+
+  for (const deathEvent of myDeaths) {
+    processedDeathEvents.add(deathEvent.EventID);
+    const { analysis, tip } = analyzePlayerDeath(
+      deathEvent,
+      data.allPlayers,
+      data.activePlayer,
+      data.events.Events,
+      junglePrediction,
+      gameTime
     );
-    if (myPlayer && myPlayer.position) {
-      const myTeam = myPlayer.team;
-      const laneOpponent = data.allPlayers.find(
-        (p) => p.team !== myTeam && p.position === myPlayer.position
-      );
-      if (laneOpponent) {
-        try {
-          const matchup = await getMatchupAnalysis(
-            myPlayer.championName,
-            laneOpponent.championName,
-            myPlayer.position
-          );
-          store.setMatchupInfo(matchup);
-        } catch {
-          // Matchup analysis not critical
-        }
+    deathAnalyses.push(analysis);
+    store.addCoachingTip(tip);
+    speakTip(tip);
+
+    // Check for death patterns (repeated mistakes)
+    const patternTip = detectDeathPatterns(deathAnalyses, gameTime);
+    if (patternTip) {
+      store.addCoachingTip(patternTip);
+      speakTip(patternTip);
+    }
+  }
+
+  // ── Player Profile Tips ──
+  const profile = getPlayerProfile();
+  if (profile.gamesPlayed >= 2) {
+    const profileTip = getProfileBasedTip(
+      profile,
+      gameTime,
+      {
+        cs: analysisResult.farmingStats.currentCS,
+        deaths: myPlayer?.scores.deaths ?? 0,
+        visionScore: myPlayer?.scores.wardScore ?? 0,
+      }
+    );
+    if (profileTip) {
+      store.addCoachingTip(profileTip);
+    }
+  }
+
+  // ── Matchup Analysis ──
+  if (!store.matchupInfo && gameTime > 30) {
+    if (myPlayer && myPlayer.position && laneOpponent) {
+      try {
+        const matchup = await getMatchupAnalysis(
+          myPlayer.championName,
+          laneOpponent.championName,
+          myPlayer.position
+        );
+        store.setMatchupInfo(matchup);
+      } catch {
+        // Matchup analysis not critical
+      }
+    }
+  }
+
+  // ── Champion-Specific Coaching ──
+  const now = Date.now();
+  const myChampion = myPlayer?.championName;
+  const currentLevel = data.activePlayer.level;
+
+  if (myChampion) {
+    // Power spike notification when leveling up
+    if (currentLevel > lastPlayerLevel && lastPlayerLevel > 0) {
+      const spikeTip = getChampionPowerSpikeTip(myChampion, currentLevel);
+      if (spikeTip) {
+        const tip = {
+          id: `champ-spike-${Date.now()}`,
+          message: spikeTip,
+          priority: 'info' as const,
+          category: 'matchup' as const,
+          timestamp: now,
+          dismissed: false,
+        };
+        store.addCoachingTip(tip);
+        speakTip(tip);
+      }
+    }
+    lastPlayerLevel = currentLevel;
+
+    // Periodic champion trading tip (every 90s during laning)
+    if (gameTime < 900 && now - lastChampionTipTime > 90000) {
+      const tradeTip = getChampionTradingTip(myChampion, gameTime);
+      if (tradeTip) {
+        store.addCoachingTip({
+          id: `champ-trade-${now}`,
+          message: tradeTip,
+          priority: 'info' as const,
+          category: 'matchup' as const,
+          timestamp: now,
+          dismissed: false,
+        });
+        lastChampionTipTime = now;
       }
     }
   }
