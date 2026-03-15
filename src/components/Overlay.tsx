@@ -6,6 +6,7 @@ import { ObjectiveBar } from './ObjectiveBar';
 import { PostGameReport } from './PostGameReport';
 import { VoiceControl } from './VoiceControl';
 import { DraggablePanel } from './DraggablePanel';
+import { MapPressureBar } from './MapPressureBar';
 import { EnemyThreatList } from './EnemyThreatList';
 import { AIThinkingPanel } from './AIThinkingPanel';
 
@@ -31,8 +32,11 @@ export function Overlay() {
         </DraggablePanel>
       </div>
 
-      {/* Bottom-right: Objective timers (compact bar) */}
-      <div className="absolute bottom-2 right-2">
+      {/* Bottom-right: Objective timers + Map pressure */}
+      <div className="absolute bottom-2 right-2 flex flex-col gap-1 items-end">
+        <DraggablePanel id="map-pressure">
+          <MapPressureBar />
+        </DraggablePanel>
         <DraggablePanel id="obj-bar">
           <ObjectiveBar />
         </DraggablePanel>

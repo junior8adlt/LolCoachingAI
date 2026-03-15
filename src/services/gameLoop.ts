@@ -21,6 +21,8 @@ import { analyzeStrategy, generateStrategyTip } from './winConditionEngine';
 import { assessPosition, generatePositionTip } from './positioningEngine';
 import { buildGameContext, getRotationCall, generateRotationTip } from './gameContext';
 import { updateRoamTracking, getRoamPredictions, generateRoamTip } from './roamPredictor';
+import { detectTempoAdvantage, generateTempoTip } from './tempoEngine';
+import { generateDamageTip, calculateDamage, predictFightOutcome, generateFightPredictionTip, getObjectiveSetup, generateObjectiveSetupTip } from './damageModel';
 import { updateCooldowns, getKillWindow } from './cooldownTracker';
 import { getEnemyHPEstimate, isEnemyLow, isEnemyVeryLow, initScreenReader } from './screenReader';
 import { pickBestAdvice, setGameStartTime } from './advicePriority';
@@ -545,6 +547,15 @@ async function processGameState(data: AllGameData): Promise<void> {
     }
   }
 
+  // ── Tempo Engine ──
+  if (myPlayer && laneOpponent && gameTime > 90) {
+    const tempo = detectTempoAdvantage(
+      myPlayer, data.activePlayer, laneOpponent, data.allPlayers, gameTime, waveInfo
+    );
+    const tempoTip = generateTempoTip(tempo);
+    if (tempoTip) allCandidateTips.push(tempoTip);
+  }
+
   // ── Positioning Engine ──
   if (myPlayer && gameTime > 120) {
     // Pass recent death EVENTS (not analyses) for positioning
@@ -579,6 +590,37 @@ async function processGameState(data: AllGameData): Promise<void> {
     const rotation = getRotationCall(ctx, myRole, waveInfo.state as any);
     const rotTip = generateRotationTip(rotation);
     if (rotTip) allCandidateTips.push(rotTip);
+  }
+
+  // ── Damage Model / Kill Probability ──
+  if (laneOpponent && !laneOpponent.isDead && gameTime > 120) {
+    const enemyForDmg = {
+      championName: laneOpponent.championName,
+      level: laneOpponent.level,
+      itemCount: laneOpponent.items.filter((i: { price: number }) => i.price >= 2500).length,
+    };
+    const dmgEstimate = calculateDamage(data.activePlayer, enemyForDmg);
+    const dmgTip = generateDamageTip(dmgEstimate, laneOpponent.championName);
+    if (dmgTip) allCandidateTips.push(dmgTip);
+  }
+
+  // ── Fight Outcome Predictor ──
+  if (gameTime > 600) {
+    const fightPred = predictFightOutcome(
+      data.allPlayers, myPlayer?.team ?? 'ORDER', gameTime
+    );
+    const fightTip = generateFightPredictionTip(fightPred);
+    if (fightTip) allCandidateTips.push(fightTip);
+  }
+
+  // ── Objective Setup Engine ──
+  if (gameTime > 240) {
+    const myRole = myPlayer?.position?.toUpperCase() ?? 'MIDDLE';
+    const objSetup = getObjectiveSetup(store.objectives, gameTime, myRole);
+    if (objSetup) {
+      const objTip = generateObjectiveSetupTip(objSetup);
+      if (objTip) allCandidateTips.push(objTip);
+    }
   }
 
   // ── Intent Engine (predict enemy actions) ──
