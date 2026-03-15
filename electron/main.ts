@@ -326,6 +326,133 @@ function createTray(): void {
   tray.on("click", () => toggleOverlay());
 }
 
+// ── Screen Capture: Enemy HP Detection ──
+// Captures a region of the screen and counts red pixels (enemy health bars).
+
+let screenCaptureInterval: ReturnType<typeof setInterval> | null = null;
+
+async function startScreenCapture(): Promise<void> {
+  if (screenCaptureInterval) return;
+
+  let Monitor: any;
+  let sharp: any;
+  try {
+    const nsModule = require("node-screenshots");
+    Monitor = nsModule.Monitor;
+    sharp = require("sharp");
+    console.log("[ScreenCapture] Libraries loaded");
+  } catch (err) {
+    console.error("[ScreenCapture] Failed to load libraries:", err);
+    return;
+  }
+
+  screenCaptureInterval = setInterval(async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+      const monitors = Monitor.all();
+      if (monitors.length === 0) return;
+      const monitor = monitors[0];
+
+      // Capture the screen
+      const image = monitor.captureImageSync();
+      if (!image) return;
+
+      const width = image.width;
+      const height = image.height;
+
+      // Analyze the CENTER area of screen where fights happen
+      // Enemy health bars are above champions, usually in the middle 60% of screen
+      const regionX = Math.floor(width * 0.2);
+      const regionY = Math.floor(height * 0.15);
+      const regionW = Math.floor(width * 0.6);
+      const regionH = Math.floor(height * 0.5);
+
+      const rawBuf = image.toRaw();
+      if (!rawBuf || rawBuf.length === 0) return;
+
+      // Use sharp to extract the region
+      const region = await sharp(rawBuf, {
+        raw: { width, height, channels: 4 }
+      })
+        .extract({ left: regionX, top: regionY, width: regionW, height: regionH })
+        .raw()
+        .toBuffer();
+
+      // Count RED pixels (enemy health bars)
+      // Enemy HP bar: R > 180, G < 60, B < 60 (bright red)
+      // Also check for the specific HSV range H:2-5
+      let redPixels = 0;
+      let totalSignificantPixels = 0;
+      let redRunLengths: number[] = []; // consecutive red pixels = health bar width
+      let currentRun = 0;
+
+      const pixelCount = region.length / 3;
+      for (let i = 0; i < region.length; i += 3) {
+        const r = region[i];
+        const g = region[i + 1];
+        const b = region[i + 2];
+
+        // Is this an enemy health bar pixel?
+        const isEnemyHP = r > 160 && g < 70 && b < 70 && r > g * 2.5 && r > b * 2.5;
+
+        if (isEnemyHP) {
+          redPixels++;
+          currentRun++;
+        } else {
+          if (currentRun > 15) { // Minimum bar width ~15 pixels
+            redRunLengths.push(currentRun);
+          }
+          currentRun = 0;
+        }
+
+        if (r > 40 || g > 40 || b > 40) {
+          totalSignificantPixels++;
+        }
+      }
+
+      // A health bar is typically 60-120 pixels wide
+      const validBars = redRunLengths.filter((len) => len >= 15 && len <= 200);
+      const barCount = validBars.length;
+
+      // Estimate enemy HP from the ratio of red pixels in detected bars
+      // More red = more HP remaining
+      let healthPercent = 1.0;
+      let confidence = 0;
+      let detected = false;
+
+      if (barCount > 0 && redPixels > 50) {
+        detected = true;
+        // Average bar width compared to expected full bar (~100px at 1080p)
+        const avgBarWidth = validBars.reduce((a, b) => a + b, 0) / validBars.length;
+        const expectedFullBar = Math.min(120, width / 16); // Scale with resolution
+        healthPercent = Math.min(1, avgBarWidth / expectedFullBar);
+        confidence = Math.min(0.8, barCount * 0.15 + (redPixels > 200 ? 0.2 : 0));
+      }
+
+      mainWindow.webContents.send("enemy-hp-update", {
+        detected,
+        healthPercent: Math.round(healthPercent * 100) / 100,
+        confidence: Math.round(confidence * 100) / 100,
+        lastUpdate: Date.now(),
+        barCount,
+      });
+
+    } catch {
+      // Silently fail - screen capture is best-effort
+    }
+  }, 2000); // Every 2 seconds
+
+  console.log("[ScreenCapture] Started (2s interval)");
+}
+
+function stopScreenCapture(): void {
+  if (screenCaptureInterval) {
+    clearInterval(screenCaptureInterval);
+    screenCaptureInterval = null;
+  }
+}
+
 // ── Riot API proxy (Node.js https, bypasses SSL issues) ──
 
 function riotApiFetch(endpoint: string): Promise<unknown> {
@@ -388,6 +515,8 @@ function registerIpcHandlers(): void {
     setTimeout(reassert, 1500);
     setTimeout(reassert, 3000);
     setTimeout(reassert, 5000);
+    // Start screen capture for enemy HP detection
+    startScreenCapture();
   });
 
   // Renderer tells us keybinds changed -> re-register global shortcuts
@@ -468,6 +597,7 @@ app.on("activate", () => {
 app.on("will-quit", () => {
   unregisterGlobalShortcuts();
   stopMousePolling();
+  stopScreenCapture();
   if (tray) {
     tray.destroy();
     tray = null;

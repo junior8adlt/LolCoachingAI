@@ -1,9 +1,13 @@
 import type { AllGameData, PlayerInfo, ActivePlayer } from '../types/game';
 import type { CoachingTip, TipPriority, TipCategory, JunglePrediction } from '../types/coaching';
-import { getChampionCoaching } from '../data/championCoaching';
-// championMechanics used by game loop directly
 import { getChampionMeta } from '../data/championMeta';
 import { getPowerSpike } from '../data/powerSpikes';
+import { getMatchupData } from '../data/matchups';
+import { getEnemyCooldowns } from './cooldownTracker';
+import { getEnemyHPEstimate } from './screenReader';
+import { recommendItems } from '../data/items';
+import { areItemsIncompatible } from '../data/itemRules';
+import type { LaneWaveInfo } from './waveEngine';
 
 // ── Smart Coach ──
 // A PROACTIVE coaching engine that identifies OPPORTUNITIES, not just threats.
@@ -51,80 +55,129 @@ function assessFightPotential(
   me: ActivePlayer,
   myInfo: PlayerInfo,
   enemy: PlayerInfo,
-  _gameTime: number
+  _gameTime: number,
+  waveInfo?: LaneWaveInfo | null
 ): FightAssessment {
-  const myHP = me.championStats.currentHealth;
-  const myMaxHP = me.championStats.maxHealth;
-  const myHPPercent = myHP / myMaxHP;
+  const myHPPercent = me.championStats.currentHealth / me.championStats.maxHealth;
   const myLevel = me.level;
-  const myKills = myInfo.scores.kills;
-  const myDeaths = myInfo.scores.deaths;
-  const myCS = myInfo.scores.creepScore;
-
-  // Note: can't see enemy HP from API, estimate from context
   const enemyLevel = enemy.level;
-  const enemyKills = enemy.scores.kills;
-  const enemyDeaths = enemy.scores.deaths;
-  const enemyCS = enemy.scores.creepScore;
+  const levelDiff = myLevel - enemyLevel;
 
-  // Gold estimates
-  const myGold = myKills * 300 + myInfo.scores.assists * 150 + myCS * 21;
-  const enemyGold = enemyKills * 300 + enemy.scores.assists * 150 + enemyCS * 21;
-  const goldDiff = myGold - enemyGold;
-
-  // Item count comparison
-  const myItems = myInfo.items.filter((i) => i.price >= 800).length;
-  const enemyItems = enemy.items.filter((i) => i.price >= 800).length;
-
-  // Enemy is dead - no fight needed
   if (enemy.isDead) {
     return { canWin: true, confidence: 1, reason: 'Enemy is dead', action: 'safe' };
   }
 
-  // Level advantage
-  const levelDiff = myLevel - enemyLevel;
+  // ── Gold estimation ──
+  const myGold = myInfo.scores.kills * 300 + myInfo.scores.assists * 150 + myInfo.scores.creepScore * 21;
+  const enemyGold = enemy.scores.kills * 300 + enemy.scores.assists * 150 + enemy.scores.creepScore * 21;
+  const goldDiff = myGold - enemyGold;
+  const myCompletedItems = myInfo.items.filter((i) => i.price >= 2500).length;
+  const enemyCompletedItems = enemy.items.filter((i) => i.price >= 2500).length;
 
-  // Scoring system
-  let score = 50; // 50 = even
+  // ── Scoring system (50 = even) ──
+  let score = 50;
+  const reasons: string[] = [];
 
-  // HP comparison (most important for immediate fights)
-  score += (myHPPercent - 0.5) * 30; // your HP matters
-  // We can't see enemy HP %, but we can estimate from items/kills
+  // HP (your HP matters a lot)
+  score += (myHPPercent - 0.5) * 30;
+  if (myHPPercent < 0.3) { score -= 15; reasons.push('you\'re too low'); }
 
-  // Level advantage
+  // Enemy HP from screen capture
+  const enemyHP = getEnemyHPEstimate();
+  if (enemyHP.detected && enemyHP.confidence > 0.3) {
+    score += (0.5 - enemyHP.healthPercent) * 25; // enemy low = we're favored
+    if (enemyHP.healthPercent < 0.3) reasons.push(`enemy ~${Math.round(enemyHP.healthPercent * 100)}% HP`);
+  }
+
+  // Level
   score += levelDiff * 8;
+  if (levelDiff >= 2) reasons.push(`+${levelDiff} levels`);
+  if (levelDiff <= -2) reasons.push(`${levelDiff} levels behind`);
 
-  // Kill/death advantage
-  score += (myKills - enemyKills) * 3;
-  score -= (myDeaths - enemyDeaths) * 3;
+  // Gold/items
+  if (goldDiff > 1000) score += 8;
+  if (goldDiff > 2000) score += 8;
+  if (goldDiff < -1000) score -= 8;
+  if (goldDiff < -2000) score -= 8;
+  score += (myCompletedItems - enemyCompletedItems) * 10;
+  if (myCompletedItems > enemyCompletedItems) reasons.push('item advantage');
+  if (myCompletedItems < enemyCompletedItems) reasons.push('item disadvantage');
 
-  // Gold/item advantage
-  if (goldDiff > 1000) score += 10;
-  if (goldDiff > 2000) score += 10;
-  if (goldDiff < -1000) score -= 10;
-  if (goldDiff < -2000) score -= 10;
-  score += (myItems - enemyItems) * 8;
-
-  // Power spike check
+  // ── Power spikes ──
   const mySpike = getPowerSpike(myInfo.championName);
   const enemySpike = getPowerSpike(enemy.championName);
-  if (mySpike?.levelSpikes.includes(myLevel)) score += 10;
+  if (mySpike?.levelSpikes.includes(myLevel)) { score += 10; reasons.push('power spike'); }
   if (enemySpike?.levelSpikes.includes(enemyLevel)) score -= 10;
 
-  // Determine action
-  if (score >= 70) {
-    return { canWin: true, confidence: 0.85, reason: `You have a big advantage (level ${levelDiff > 0 ? '+' + levelDiff : levelDiff}, ${goldDiff > 0 ? '+' : ''}${Math.round(goldDiff)}g)`, action: 'all-in' };
+  // ── Range advantage (NEW) ──
+  const myMeta = getChampionMeta(myInfo.championName);
+  const enemyMeta = getChampionMeta(enemy.championName);
+  const myIsRanged = myMeta?.archetypes.some((a) => a === 'marksman' || a === 'artillery' || a === 'mage') ?? false;
+  const enemyIsRanged = enemyMeta?.archetypes.some((a) => a === 'marksman' || a === 'artillery' || a === 'mage') ?? false;
+
+  if (myIsRanged && !enemyIsRanged) {
+    score += 8; // Range advantage for short trades
+    reasons.push('range advantage');
   }
-  if (score >= 60) {
-    return { canWin: true, confidence: 0.7, reason: 'You have an advantage', action: 'fight' };
+  if (!myIsRanged && enemyIsRanged) {
+    score -= 5; // Melee vs ranged is unfavorable for poke
   }
-  if (score >= 52) {
-    return { canWin: true, confidence: 0.55, reason: 'Slightly favored', action: 'trade' };
+
+  // ── Champion matchup (NEW) ──
+  const matchup = getMatchupData(myInfo.championName, enemy.championName);
+  if (matchup) {
+    // difficulty 1 = easy for you, 5 = hard for you
+    const matchupBonus = (3 - matchup.difficulty) * 5; // -10 to +10
+    score += matchupBonus;
+    if (matchup.difficulty >= 4) reasons.push(`tough matchup vs ${enemy.championName}`);
+    if (matchup.difficulty <= 2) reasons.push(`favorable matchup`);
+  }
+
+  // ── Cooldowns (NEW) ──
+  const enemyCDs = getEnemyCooldowns(enemy.summonerName);
+  if (enemyCDs) {
+    if (enemyCDs.flashDown) { score += 12; reasons.push('enemy flash down'); }
+    if (enemyCDs.ultDown) { score += 10; reasons.push('enemy ult down'); }
+  }
+
+  // ── Summoner spells (NEW) ──
+  const mySpells = [
+    myInfo.summonerSpells.summonerSpellOne.displayName.toLowerCase(),
+    myInfo.summonerSpells.summonerSpellTwo.displayName.toLowerCase(),
+  ].join(' ');
+  const hasIgnite = mySpells.includes('ignite') || mySpells.includes('incendiar');
+  const hasHeal = mySpells.includes('heal') || mySpells.includes('curación');
+  if (hasIgnite) score += 4; // ignite = kill pressure
+  if (hasHeal) score += 2;
+
+  // ── Wave state (NEW) - don't fight in big enemy wave ──
+  if (waveInfo) {
+    if (waveInfo.state === 'pushing_to_you' || waveInfo.state === 'frozen_near_enemy') {
+      score -= 12; // Fighting in enemy wave = bad
+      reasons.push('bad wave position');
+    }
+    if (waveInfo.state === 'pushing_to_enemy' || waveInfo.state === 'frozen_near_you') {
+      score += 5; // Wave is on your side = safer
+    }
+  }
+
+  // ── Build reason string ──
+  const topReasons = reasons.slice(0, 3).join(', ');
+
+  // ── Determine action ──
+  if (score >= 72) {
+    return { canWin: true, confidence: 0.85, reason: `Big advantage: ${topReasons}`, action: 'all-in' };
+  }
+  if (score >= 62) {
+    return { canWin: true, confidence: 0.7, reason: topReasons || 'You have an advantage', action: 'fight' };
+  }
+  if (score >= 53) {
+    return { canWin: true, confidence: 0.55, reason: topReasons || 'Slightly favored', action: 'trade' };
   }
   if (score >= 45) {
-    return { canWin: false, confidence: 0.5, reason: 'Even matchup', action: 'poke' };
+    return { canWin: false, confidence: 0.5, reason: topReasons || 'Even matchup', action: 'poke' };
   }
-  return { canWin: false, confidence: 0.3, reason: `Enemy has advantage (${Math.abs(levelDiff)} levels ${levelDiff < 0 ? 'behind' : ''}, ${Math.abs(Math.round(goldDiff))}g ${goldDiff < 0 ? 'behind' : ''})`, action: 'safe' };
+  return { canWin: false, confidence: 0.3, reason: topReasons || 'Enemy advantage', action: 'safe' };
 }
 
 // ── Build Recommendations ──
@@ -220,13 +273,14 @@ function detectOpportunities(
   enemy: PlayerInfo | undefined,
   enemies: PlayerInfo[],
   junglePrediction: JunglePrediction | null,
-  gameTime: number
+  gameTime: number,
+  waveInfo?: LaneWaveInfo | null
 ): CoachingTip[] {
   const tips: CoachingTip[] = [];
 
   if (!enemy) return tips;
 
-  const fight = assessFightPotential(me, myInfo, enemy, gameTime);
+  const fight = assessFightPotential(me, myInfo, enemy, gameTime, waveInfo);
   const minutes = Math.floor(gameTime / 60);
 
   // ── Opportunity: Enemy is dead → push/take objectives ──
@@ -288,6 +342,16 @@ function detectOpportunities(
     if (tip) tips.push(tip);
   }
 
+  // ── Wave-aware fight warning ──
+  if (waveInfo && fight.canWin &&
+      (waveInfo.state === 'pushing_to_you' || waveInfo.state === 'frozen_near_enemy')) {
+    const tip = createTip(
+      `You could win the fight, but wave is against you. Crash the wave first, then look for a trade.`,
+      'info', 'trading'
+    );
+    if (tip) tips.push(tip);
+  }
+
   // ── Warning: Enemy has advantage - but be specific about WHY ──
   if (levelDiff <= -2) {
     const tip = createTip(
@@ -297,15 +361,8 @@ function detectOpportunities(
     if (tip) tips.push(tip);
   }
 
-  // ── Champion-specific contextual tips ──
-  const coaching = getChampionCoaching(myInfo.championName);
-  if (coaching) {
-    // Give phase-appropriate strategy
-    if (gameTime < 900 && minutes % 3 === 0) {
-      const tip = createTip(coaching.earlyGame, 'info', 'matchup');
-      if (tip) tips.push(tip);
-    }
-  }
+  // Champion tips are now handled by gameLoop on level-up and phase transitions
+  // No more timer-based triggers here
 
   // ── Low HP fight assessment ──
   const myHPPercent = me.championStats.currentHealth / me.championStats.maxHealth;
@@ -335,12 +392,50 @@ function detectOpportunities(
     if (tip) tips.push(tip);
   }
 
-  // ── Build recommendation ──
-  if (minutes > 5 && minutes % 4 === 0) {
+  // ── Build recommendation (only when you have enough gold to act on it) ──
+  if (me.currentGold >= 900) {
     const buildAdvice = analyzeBuildNeeds(me, myInfo, enemies);
     if (buildAdvice) {
       const tip = createTip(buildAdvice.message, buildAdvice.priority, 'general');
       if (tip) tips.push(tip);
+    }
+
+    // Smart item recommendation based on archetype + enemy comp
+    if (me.currentGold >= 2500) {
+      const myArchMeta = getChampionMeta(myInfo.championName);
+      const myArch = myArchMeta?.archetypes[0] ?? 'marksman';
+      const tankCount = enemies.filter((e) => {
+        const m = getChampionMeta(e.championName);
+        return m?.archetypes.some((a) => a === 'tank' || a === 'juggernaut');
+      }).length;
+      const apCount = enemies.filter((e) => {
+        const m = getChampionMeta(e.championName);
+        return m?.archetypes.some((a) => a === 'mage' || a === 'enchanter');
+      }).length;
+      const adCount = enemies.filter((e) => {
+        const m = getChampionMeta(e.championName);
+        return m?.archetypes.some((a) => a === 'marksman' || a === 'assassin');
+      }).length;
+      const healerCount = enemies.filter((e) => {
+        const name = e.championName.toLowerCase();
+        return ['aatrox', 'dr. mundo', 'fiora', 'vladimir', 'warwick', 'yuumi', 'soraka', 'sylas', 'briar', 'swain', 'illaoi', 'olaf'].includes(name);
+      }).length;
+
+      const recs = recommendItems(myArch, { tanks: tankCount, ap: apCount, ad: adCount, healers: healerCount });
+      // Filter out items already owned or incompatible
+      const myItemNames = myInfo.items.map((i) => i.displayName);
+      const validRecs = recs.filter((r) =>
+        !myItemNames.some((owned) => owned.toLowerCase() === r.toLowerCase()) &&
+        !myItemNames.some((owned) => areItemsIncompatible(owned, r))
+      );
+
+      if (validRecs.length > 0) {
+        const tip = createTip(
+          `Build suggestion: ${validRecs[0]}. ${validRecs.length > 1 ? `Also consider: ${validRecs[1]}.` : ''}`,
+          'info', 'general'
+        );
+        if (tip) tips.push(tip);
+      }
     }
   }
 
@@ -358,7 +453,8 @@ function getPlayerSide(player: PlayerInfo): 'top' | 'mid' | 'bot' {
 
 export function getSmartCoachingTips(
   data: AllGameData,
-  junglePrediction: JunglePrediction | null
+  junglePrediction: JunglePrediction | null,
+  waveInfo?: LaneWaveInfo | null
 ): CoachingTip[] {
   const me = data.activePlayer;
   const myInfo = data.allPlayers.find(
@@ -371,7 +467,7 @@ export function getSmartCoachingTips(
   const laneEnemy = enemies.find((p) => p.position === myInfo.position && myInfo.position !== '');
   const gameTime = data.gameData.gameTime;
 
-  return detectOpportunities(me, myInfo, laneEnemy, enemies, junglePrediction, gameTime);
+  return detectOpportunities(me, myInfo, laneEnemy, enemies, junglePrediction, gameTime, waveInfo);
 }
 
 export function resetSmartCoach(): void {

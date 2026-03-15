@@ -10,6 +10,11 @@ import { analyzePlayerDeath, detectDeathPatterns, type DeathAnalysisResult } fro
 import { getChampionPowerSpikeTip, getChampionTradingTip, getChampionCoaching, getChampionCombo } from '../data/championCoaching';
 import { getChampionMechanics } from '../data/championMechanics';
 import { getSmartCoachingTips } from './smartCoach';
+import { detectPhase } from './gamePhaseEngine';
+import { generateThreatWarnings, getMatchupFightContext } from './threatModel';
+import { updateCooldowns, getKillWindow } from './cooldownTracker';
+import { getEnemyHPEstimate, isEnemyLow, isEnemyVeryLow, initScreenReader } from './screenReader';
+import { pickBestAdvice } from './advicePriority';
 import { speakTip, speakRaw } from './voiceCoach';
 import { t } from './i18n';
 import type { AllGameData, GameEvent } from '../types/game';
@@ -28,6 +33,7 @@ let processedDeathEvents: Set<number> = new Set();
 let deathAnalyses: DeathAnalysisResult[] = [];
 let lastPlayerLevel = 0;
 let lastChampionTipTime = 0;
+let lastItemCount = 0; // Track completed items for item spike detection
 
 function determineGamePhase(gameTime: number): GamePhase {
   if (gameTime <= 0) return 'LOADING';
@@ -54,6 +60,7 @@ function onGameStart(): void {
   // Force overlay visible and on top
   if (!store.overlayVisible) store.toggleOverlay();
   notifyElectron('game-start');
+  initScreenReader();
 
   previousEvents = [];
   lastAICoachTime = 0;
@@ -135,17 +142,19 @@ async function processGameState(data: AllGameData): Promise<void> {
     store.setGamePhase(phase);
   }
 
+  // Collect ALL candidate tips, then the priority engine picks the best
+  const allCandidateTips: import('../types/coaching').CoachingTip[] = [];
+
   const analysisResult = analyzeGameState(data, previousEvents);
 
   store.updateFarmingStats(analysisResult.farmingStats);
   store.updateThreats(analysisResult.threats);
   store.updateObjectives(analysisResult.objectives);
 
-  // Only push DANGER-level tips from the old analyzer (not the repetitive info/warnings)
+  // Only danger tips from old analyzer go to candidates
   for (const tip of analysisResult.tips) {
     if (tip.priority === 'danger') {
-      store.addCoachingTip(tip);
-      speakTip(tip);
+      allCandidateTips.push(tip);
     }
   }
 
@@ -167,8 +176,7 @@ async function processGameState(data: AllGameData): Promise<void> {
 
   const jglTip = getJungleCoachingTip(junglePrediction, gameTime, playerSide);
   if (jglTip) {
-    store.addCoachingTip(jglTip);
-    speakTip(jglTip);
+    allCandidateTips.push(jglTip);
   }
 
   // ── Wave Engine ──
@@ -194,8 +202,7 @@ async function processGameState(data: AllGameData): Promise<void> {
 
   const waveTip = getWaveCoachingTip(waveInfo, gameTime, store.objectives);
   if (waveTip) {
-    store.addCoachingTip(waveTip);
-    speakTip(waveTip);
+    allCandidateTips.push(waveTip);
   }
 
   // Wave-aware recall suggestion
@@ -205,23 +212,19 @@ async function processGameState(data: AllGameData): Promise<void> {
     data.activePlayer.championStats.currentHealth / data.activePlayer.championStats.maxHealth
   );
   if (waveRecall.canRecall && data.activePlayer.currentGold >= 1000) {
-    const recallTip = {
+    allCandidateTips.push({
       id: `wave-recall-${Date.now()}`,
       message: waveRecall.reason,
       priority: 'info' as const,
       category: 'recall' as const,
       timestamp: Date.now(),
       dismissed: false,
-    };
-    store.addCoachingTip(recallTip);
+    });
   }
 
   // ── Vision Awareness ──
   const visionAnalysis = analyzeVision(data, junglePrediction, gameTime);
-  for (const vTip of visionAnalysis.tips) {
-    store.addCoachingTip(vTip);
-    speakTip(vTip);
-  }
+  allCandidateTips.push(...visionAnalysis.tips);
 
   // ── Death Analysis ──
   const myDeaths = data.events.Events.filter(
@@ -241,10 +244,10 @@ async function processGameState(data: AllGameData): Promise<void> {
       gameTime
     );
     deathAnalyses.push(analysis);
+    // Death analysis goes directly - it's event-driven and always important
     store.addCoachingTip(tip);
     speakTip(tip);
 
-    // Check for death patterns (repeated mistakes)
     const patternTip = detectDeathPatterns(deathAnalyses, gameTime);
     if (patternTip) {
       store.addCoachingTip(patternTip);
@@ -265,7 +268,7 @@ async function processGameState(data: AllGameData): Promise<void> {
       }
     );
     if (profileTip) {
-      store.addCoachingTip(profileTip);
+      allCandidateTips.push(profileTip);
     }
   }
 
@@ -295,16 +298,14 @@ async function processGameState(data: AllGameData): Promise<void> {
     if (currentLevel > lastPlayerLevel && lastPlayerLevel > 0) {
       const spikeTip = getChampionPowerSpikeTip(myChampion, currentLevel);
       if (spikeTip) {
-        const tip = {
+        allCandidateTips.push({
           id: `champ-spike-${Date.now()}`,
           message: spikeTip,
           priority: 'info' as const,
           category: 'matchup' as const,
           timestamp: now,
           dismissed: false,
-        };
-        store.addCoachingTip(tip);
-        speakTip(tip);
+        });
       }
 
       // At key levels, also give combo reminder
@@ -323,6 +324,25 @@ async function processGameState(data: AllGameData): Promise<void> {
       }
     }
     lastPlayerLevel = currentLevel;
+
+    // ── Item completion detection ──
+    const currentItemCount = myPlayer ? myPlayer.items.filter((i: { price: number }) => i.price >= 2500).length : 0;
+    if (currentItemCount > lastItemCount && lastItemCount >= 0 && myPlayer) {
+      const newItem = myPlayer.items
+        .filter((i: { price: number }) => i.price >= 2500)
+        .sort((a: { price: number }, b: { price: number }) => b.price - a.price)[0];
+      if (newItem) {
+        allCandidateTips.push({
+          id: `item-spike-${now}`,
+          message: `${newItem.displayName} completed! You just power spiked. Look for a fight or objective.`,
+          priority: 'warning' as const,
+          category: 'trading' as const,
+          timestamp: now,
+          dismissed: false,
+        });
+      }
+    }
+    lastItemCount = currentItemCount;
 
     // Rotating champion tips: trading → mechanics → strategy (every 60s during laning)
     if (gameTime < 900 && now - lastChampionTipTime > 60000) {
@@ -399,9 +419,94 @@ async function processGameState(data: AllGameData): Promise<void> {
     }
   }
 
-  // ── Smart Coach (the brain - opportunities, fights, builds) ──
-  const smartTips = getSmartCoachingTips(data, junglePrediction);
-  for (const tip of smartTips) {
+  // ── Game Phase Detection ──
+  const phaseInfo = detectPhase(
+    gameTime,
+    data.events.Events,
+    myPlayer,
+    laneOpponent,
+    data.allPlayers,
+    store.objectives
+  );
+  // Phase context available for all downstream systems
+  console.log(`[Phase] ${phaseInfo.phase} (${phaseInfo.context})`);
+
+  // ── Cooldown Tracking ──
+  const enemies = data.allPlayers.filter((p) => p.team !== myPlayer?.team);
+  updateCooldowns(data.events.Events, gameTime, enemies);
+
+  // ── Enemy HP Detection (from screen capture) ──
+  if (laneOpponent && !laneOpponent.isDead && gameTime > 120) {
+    const hpReading = getEnemyHPEstimate();
+    if (isEnemyVeryLow()) {
+      allCandidateTips.push({
+        id: `hp-kill-${Date.now()}`,
+        message: `${laneOpponent.championName} is very low HP! Go for the kill NOW.`,
+        priority: 'danger',
+        category: 'trading',
+        timestamp: Date.now(),
+        dismissed: false,
+      });
+    } else if (isEnemyLow()) {
+      const myHPPercent = data.activePlayer.championStats.currentHealth / data.activePlayer.championStats.maxHealth;
+      if (myHPPercent > 0.4) {
+        allCandidateTips.push({
+          id: `hp-trade-${Date.now()}`,
+          message: `${laneOpponent.championName} is low (~${Math.round(hpReading.healthPercent * 100)}% HP). You can trade aggressively or all-in.`,
+          priority: 'warning',
+          category: 'trading',
+          timestamp: Date.now(),
+          dismissed: false,
+        });
+      }
+    }
+  }
+
+  // Kill window detection (cooldowns) - HIGHEST PRIORITY tip
+  if (laneOpponent && !laneOpponent.isDead && gameTime > 120) {
+    const killWindow = getKillWindow(laneOpponent.summonerName, gameTime);
+    if (killWindow.hasWindow) {
+      // This is a DANGER level tip - flash/ult down = real kill window
+      allCandidateTips.push({
+        id: `kw-${Date.now()}`,
+        message: `${killWindow.reason} Play aggressive NOW.`,
+        priority: 'danger' as const,
+        category: 'trading' as const,
+        timestamp: Date.now(),
+        dismissed: false,
+      });
+    }
+  }
+
+  // ── Threat Model (champion-specific warnings) ──
+  const threatTips = generateThreatWarnings(enemies, gameTime);
+  allCandidateTips.push(...threatTips);
+
+  // ── Matchup context (archetype-based fight advice) ──
+  if (laneOpponent && gameTime > 90 && gameTime < 900) {
+    const matchupCtx = getMatchupFightContext(
+      myPlayer?.championName ?? '',
+      laneOpponent.championName
+    );
+    if (matchupCtx) {
+      allCandidateTips.push({
+        id: `matchup-ctx-${Date.now()}`,
+        message: matchupCtx,
+        priority: 'info',
+        category: 'matchup',
+        timestamp: Date.now(),
+        dismissed: false,
+      });
+    }
+  }
+
+  // ── Smart Coach (opportunities, fights, builds) ──
+  const smartTips = getSmartCoachingTips(data, junglePrediction, waveInfo);
+  allCandidateTips.push(...smartTips);
+
+  // ── Priority Engine: pick THE BEST tip to show ──
+  const bestTips = pickBestAdvice(allCandidateTips, 2); // max 2 tips at a time
+  for (const tip of bestTips) {
     store.addCoachingTip(tip);
     speakTip(tip);
   }

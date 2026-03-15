@@ -16,6 +16,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Force overlay on top
   forceOverlayShow: () => ipcRenderer.invoke("force-overlay-show"),
 
+  // Enemy HP from screen capture
+  onEnemyHP: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("enemy-hp-update", handler);
+    return () => ipcRenderer.removeListener("enemy-hp-update", handler);
+  },
+
   // Global hotkeys from main process
   onGlobalKey: (callback) => {
     const handler = (_event, action) => callback(action);
