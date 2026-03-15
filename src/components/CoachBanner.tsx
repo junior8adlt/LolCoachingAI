@@ -102,8 +102,8 @@ export function CoachBanner() {
     // Clear previous timer
     if (timerRef.current) clearTimeout(timerRef.current);
 
-    // Start exit after 5s (danger stays 6s)
-    const duration = intent === 'danger' ? 6000 : 5000;
+    // Short duration: 3s normal, 4s danger (coach says it fast, player glances)
+    const duration = intent === 'danger' ? 4000 : 3000;
     timerRef.current = setTimeout(() => {
       setBanner((prev) => ({ ...prev, exiting: true }));
       // Remove after fade animation
@@ -167,17 +167,25 @@ export function CoachBanner() {
              style={{ textShadow: '0 1px 8px rgba(0,0,0,0.4)' }}>
             {banner.tip.message}
           </p>
-          <div className="flex items-center gap-3 mt-2">
-            <span className="text-[9px] text-gray-500 uppercase tracking-wider">
+          <div className="flex items-center gap-3 mt-1.5">
+            <span className="text-[8px] text-gray-500/60 uppercase tracking-wider">
               {banner.tip.category}
             </span>
             {banner.intent === 'aggressive' && (
-              <span className="text-[8px] text-emerald-500/70 tracking-wider uppercase">
+              <span className="text-[8px] text-emerald-500/60 tracking-wider uppercase flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-emerald-400" />
                 high confidence
               </span>
             )}
+            {banner.intent === 'opportunity' && (
+              <span className="text-[8px] text-amber-400/60 tracking-wider uppercase flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-amber-400" />
+                window open
+              </span>
+            )}
             {banner.intent === 'danger' && (
-              <span className="text-[8px] text-red-400/70 tracking-wider uppercase animate-pulse">
+              <span className="text-[8px] text-red-400/70 tracking-wider uppercase animate-pulse flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-red-400" />
                 act now
               </span>
             )}
@@ -190,7 +198,7 @@ export function CoachBanner() {
         <div
           className={`h-full ${s.stripe} opacity-40`}
           style={{
-            animation: `coach-progress ${banner.intent === 'danger' ? '6' : '5'}s linear forwards`,
+            animation: `coach-progress ${banner.intent === 'danger' ? '4' : '3'}s linear forwards`,
           }}
         />
       </div>

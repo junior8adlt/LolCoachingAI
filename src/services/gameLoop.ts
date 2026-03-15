@@ -14,6 +14,10 @@ import { detectPhase } from './gamePhaseEngine';
 import { generateThreatWarnings, getMatchupFightContext } from './threatModel';
 import { getObjectiveRotationTips, getTeamfightTips, getDiveTip, getRotationTip } from './macroCoach';
 import { getGameAwarenessTips } from './gameAwareness';
+import { predictEnemyIntents, getHighestThreatIntent, generateIntentTip } from './intentEngine';
+import { evaluateCombat, generateCombatTip } from './combatEvaluator';
+import { updateTeamfightState, generateTeamfightTip } from './teamfightEngine';
+import { analyzeStrategy, generateStrategyTip } from './winConditionEngine';
 import { updateCooldowns, getKillWindow } from './cooldownTracker';
 import { getEnemyHPEstimate, isEnemyLow, isEnemyVeryLow, initScreenReader } from './screenReader';
 import { pickBestAdvice, setGameStartTime } from './advicePriority';
@@ -536,6 +540,47 @@ async function processGameState(data: AllGameData): Promise<void> {
       const diveTip = getDiveTip(myHPPercent, laneOpponent, true, gameTime);
       if (diveTip) allCandidateTips.push(diveTip);
     }
+  }
+
+  // ── Intent Engine (predict enemy actions) ──
+  if (gameTime > 120) {
+    const intents = predictEnemyIntents(
+      data.allPlayers, myPlayer!, data.events.Events, gameTime,
+      store.objectives, junglePrediction
+    );
+    const topThreat = getHighestThreatIntent(intents);
+    if (topThreat) {
+      const intentTip = generateIntentTip(topThreat);
+      if (intentTip) allCandidateTips.push(intentTip);
+    }
+  }
+
+  // ── Combat Evaluator (kill probability) ──
+  if (laneOpponent && !laneOpponent.isDead && myPlayer) {
+    const combatResult = evaluateCombat(
+      data.activePlayer, myPlayer, laneOpponent
+    );
+    const combatTip = generateCombatTip(combatResult, laneOpponent.championName);
+    if (combatTip) allCandidateTips.push(combatTip);
+  }
+
+  // ── Teamfight Engine ──
+  if (gameTime > 600) {
+    const tfState = updateTeamfightState(
+      data.events.Events, gameTime, data.allPlayers, myPlayer?.team ?? 'ORDER'
+    );
+    const tfTip = generateTeamfightTip(tfState, myPlayer?.championName ?? '');
+    if (tfTip) allCandidateTips.push(tfTip);
+  }
+
+  // ── Win Condition Engine (strategy) ──
+  if (gameTime > 300) {
+    const strategy = analyzeStrategy(
+      data.allPlayers, myPlayer?.team ?? 'ORDER',
+      data.events.Events, gameTime, store.objectives
+    );
+    const stratTip = generateStrategyTip(strategy, gameTime);
+    if (stratTip) allCandidateTips.push(stratTip);
   }
 
   // ── Priority Engine: pick THE BEST tip to show ──
