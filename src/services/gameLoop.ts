@@ -12,9 +12,11 @@ import { getChampionMechanics } from '../data/championMechanics';
 import { getSmartCoachingTips } from './smartCoach';
 import { detectPhase } from './gamePhaseEngine';
 import { generateThreatWarnings, getMatchupFightContext } from './threatModel';
+import { getObjectiveRotationTips, getTeamfightTips, getDiveTip, getRotationTip } from './macroCoach';
+import { getGameAwarenessTips } from './gameAwareness';
 import { updateCooldowns, getKillWindow } from './cooldownTracker';
 import { getEnemyHPEstimate, isEnemyLow, isEnemyVeryLow, initScreenReader } from './screenReader';
-import { pickBestAdvice } from './advicePriority';
+import { pickBestAdvice, setGameStartTime } from './advicePriority';
 import { speakTip, speakRaw } from './voiceCoach';
 import { t } from './i18n';
 import type { AllGameData, GameEvent } from '../types/game';
@@ -61,6 +63,7 @@ function onGameStart(): void {
   if (!store.overlayVisible) store.toggleOverlay();
   notifyElectron('game-start');
   initScreenReader();
+  setGameStartTime(Date.now());
 
   previousEvents = [];
   lastAICoachTime = 0;
@@ -500,9 +503,40 @@ async function processGameState(data: AllGameData): Promise<void> {
     }
   }
 
+  // ── Game Awareness Model (fight brewing, gank window, rotation, teamfight state) ──
+  const awarenessTips = getGameAwarenessTips(
+    gameTime,
+    data.events.Events,
+    data.allPlayers,
+    myPlayer,
+    store.objectives,
+    junglePrediction
+  );
+  allCandidateTips.push(...awarenessTips);
+
+  // ── Macro Coach (objectives, teamfights, rotations, dive safety) ──
+  const objectiveTips = getObjectiveRotationTips(gameTime, store.objectives, myPlayer, data.allPlayers);
+  allCandidateTips.push(...objectiveTips);
+
+  const teamfightTips = getTeamfightTips(gameTime, data.allPlayers, myPlayer);
+  allCandidateTips.push(...teamfightTips);
+
+  const rotationTip = getRotationTip(gameTime, myPlayer, data.allPlayers);
+  if (rotationTip) allCandidateTips.push(rotationTip);
+
   // ── Smart Coach (opportunities, fights, builds) ──
   const smartTips = getSmartCoachingTips(data, junglePrediction, waveInfo);
   allCandidateTips.push(...smartTips);
+
+  // Dive safety warning (checks if smart coach suggests fight but it might be a dive)
+  if (laneOpponent && !laneOpponent.isDead) {
+    const myHPPercent = data.activePlayer.championStats.currentHealth / data.activePlayer.championStats.maxHealth;
+    const fightTipExists = smartTips.some((t) => t.category === 'trading' && t.message.toLowerCase().includes('fight'));
+    if (fightTipExists) {
+      const diveTip = getDiveTip(myHPPercent, laneOpponent, true, gameTime);
+      if (diveTip) allCandidateTips.push(diveTip);
+    }
+  }
 
   // ── Priority Engine: pick THE BEST tip to show ──
   const bestTips = pickBestAdvice(allCandidateTips, 2); // max 2 tips at a time

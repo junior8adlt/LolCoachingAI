@@ -91,7 +91,24 @@ function scoreTip(tip: CoachingTip): number {
 
 let lastAdviceTime = 0;
 let lastAdviceMessage = '';
-const MIN_ADVICE_INTERVAL = 8000; // Minimum 8s between tips (coach doesn't talk non-stop)
+const MIN_ADVICE_INTERVAL = 15000;   // 15s between tips - a real coach doesn't talk every 5s
+const BASE_SCORE_THRESHOLD = 35;     // Early game threshold (more guidance needed)
+const LATE_SCORE_THRESHOLD = 55;     // Late game threshold (player knows the game, only high-value tips)
+let gameStartTime = 0;
+
+export function setGameStartTime(time: number): void {
+  gameStartTime = time;
+}
+
+// Dynamic threshold: more tips early, fewer late
+function getScoreThreshold(): number {
+  const elapsed = Date.now() - gameStartTime;
+  const minutes = elapsed / 60000;
+  if (minutes < 10) return BASE_SCORE_THRESHOLD;    // Early: more coaching
+  if (minutes < 20) return BASE_SCORE_THRESHOLD + 8; // Mid: moderate
+  if (minutes < 30) return BASE_SCORE_THRESHOLD + 15; // Late: only important stuff
+  return LATE_SCORE_THRESHOLD;                        // Very late: almost silent unless critical
+}
 
 export function pickBestAdvice(
   candidates: CoachingTip[],
@@ -99,9 +116,9 @@ export function pickBestAdvice(
 ): CoachingTip[] {
   const now = Date.now();
 
-  // Don't spam - minimum interval between advice
+  // Don't spam - minimum 15s between advice
   if (now - lastAdviceTime < MIN_ADVICE_INTERVAL) {
-    // Exception: danger tips always go through
+    // Exception: DANGER tips cut through the silence
     const dangerOnly = candidates.filter((t) => t.priority === 'danger');
     if (dangerOnly.length === 0) return [];
     candidates = dangerOnly;
@@ -118,10 +135,18 @@ export function pickBestAdvice(
   // Sort by score descending
   scored.sort((a, b) => b.score - a.score);
 
-  // Pick top N, but filter out duplicates of the last message
+  // ── SILENCE: if nothing is important enough, say NOTHING ──
+  // Dynamic threshold: coach talks more early, less late
+  const threshold = getScoreThreshold();
+  if (scored[0].score < threshold) {
+    return [];
+  }
+
+  // Pick top N, filter duplicates
   const result: CoachingTip[] = [];
-  for (const { tip } of scored) {
+  for (const { tip, score } of scored) {
     if (result.length >= maxTips) break;
+    if (score < threshold) break;
 
     // Skip if too similar to last advice
     if (tip.message.slice(0, 30) === lastAdviceMessage.slice(0, 30)) continue;

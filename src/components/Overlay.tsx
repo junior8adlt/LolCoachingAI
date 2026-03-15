@@ -1,77 +1,74 @@
+import { useState } from 'react';
 import { useGameStore } from '../stores/gameStore';
-import { AIThinkingPanel } from './AIThinkingPanel';
-import { CoachingTipPanel } from './CoachingTipPanel';
-import { EnemyThreatList } from './EnemyThreatList';
-import { FarmTracker } from './FarmTracker';
-import { JungleTracker } from './JungleTracker';
-import { ObjectiveTimers } from './ObjectiveTimers';
-import { MatchupAnalysis } from './MatchupAnalysis';
+import { CoachBanner } from './CoachBanner';
+import { MiniStats } from './MiniStats';
+import { ObjectiveBar } from './ObjectiveBar';
 import { PostGameReport } from './PostGameReport';
 import { VoiceControl } from './VoiceControl';
 import { DraggablePanel } from './DraggablePanel';
+import { EnemyThreatList } from './EnemyThreatList';
+import { AIThinkingPanel } from './AIThinkingPanel';
 
 export function Overlay() {
   const gamePhase = useGameStore((s) => s.gamePhase);
-  const matchupInfo = useGameStore((s) => s.matchupInfo);
   const postGameAnalysis = useGameStore((s) => s.postGameAnalysis);
-
-  const showMatchup = matchupInfo && (gamePhase === 'LOADING' || gamePhase === 'EARLY_GAME');
+  const [showDebug, setShowDebug] = useState(false);
 
   return (
     <div className="absolute inset-0 pointer-events-none">
-      {/* Top-left: AI Thinking Panel */}
-      <div className="absolute top-3 left-3 animate-slide-in-left">
-        <DraggablePanel id="ai-thinking">
-          <AIThinkingPanel />
+
+      {/* ═══ THE COACH ═══ */}
+      {/* Center-top: The main coaching banner — BIG, temporary, color-coded */}
+      <div className="absolute top-[8%] left-1/2 -translate-x-1/2 w-full max-w-[520px] px-4">
+        <CoachBanner />
+      </div>
+
+      {/* ═══ AMBIENT MICRO-WIDGETS ═══ */}
+      {/* Bottom-left: CS + Jungle (tiny) */}
+      <div className="absolute bottom-2 left-2">
+        <DraggablePanel id="mini-stats">
+          <MiniStats />
         </DraggablePanel>
       </div>
 
-      {/* Top-right: Enemy Threat List */}
-      <div className="absolute top-3 right-3 animate-slide-in-right">
-        <DraggablePanel id="enemy-threats">
-          <EnemyThreatList />
+      {/* Bottom-right: Objective timers (compact bar) */}
+      <div className="absolute bottom-2 right-2">
+        <DraggablePanel id="obj-bar">
+          <ObjectiveBar />
         </DraggablePanel>
       </div>
 
-      {/* Bottom-left: Farm Tracker + Jungle Tracker */}
-      <div className="absolute bottom-3 left-3 flex flex-col gap-2">
-        <DraggablePanel id="farm-tracker">
-          <FarmTracker />
-        </DraggablePanel>
-        <DraggablePanel id="jungle-tracker">
-          <JungleTracker />
-        </DraggablePanel>
-      </div>
-
-      {/* Bottom-right: Objective Timers */}
-      <div className="absolute bottom-3 right-3 animate-slide-in-right">
-        <DraggablePanel id="objectives">
-          <ObjectiveTimers />
-        </DraggablePanel>
-      </div>
-
-      {/* Center-bottom: Coaching Tip Panel */}
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 animate-slide-in-up">
-        <DraggablePanel id="coaching-tips">
-          <CoachingTipPanel />
-        </DraggablePanel>
-      </div>
-
-      {/* Right-center: Voice Control */}
-      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-auto">
+      {/* Right edge: Voice control */}
+      <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-auto">
         <VoiceControl />
       </div>
 
-      {/* Matchup Analysis */}
-      {showMatchup && (
-        <div className="absolute top-14 left-3 animate-fade-in">
-          <DraggablePanel id="matchup">
-            <MatchupAnalysis />
-          </DraggablePanel>
-        </div>
+      {/* ═══ DEBUG / EXPANDED PANELS (hidden by default) ═══ */}
+      {/* Toggle with backtick key or small button */}
+      <button
+        onClick={() => setShowDebug(!showDebug)}
+        className="absolute top-1 left-1 pointer-events-auto w-5 h-5 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center text-[8px] text-gray-600 transition-colors z-50"
+        title="Toggle debug panels"
+      >
+        {showDebug ? '−' : '+'}
+      </button>
+
+      {showDebug && (
+        <>
+          <div className="absolute top-8 left-2 animate-fade-in">
+            <DraggablePanel id="debug-ai">
+              <AIThinkingPanel />
+            </DraggablePanel>
+          </div>
+          <div className="absolute top-8 right-2 animate-fade-in">
+            <DraggablePanel id="debug-threats">
+              <EnemyThreatList />
+            </DraggablePanel>
+          </div>
+        </>
       )}
 
-      {/* Post-game report */}
+      {/* ═══ POST-GAME ═══ */}
       {gamePhase === 'POST_GAME' && postGameAnalysis && (
         <div className="absolute inset-0 pointer-events-auto">
           <PostGameReport />

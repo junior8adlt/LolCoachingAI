@@ -156,6 +156,24 @@ export function detectPhase(
     }
   }
 
+  // ── Gank window: enemy jungler dead → safe to play aggressive ──
+  const enemyJunglerDead = allPlayers.some(
+    (p) => p.team !== myTeam && p.isDead &&
+    (p.summonerSpells.summonerSpellOne.displayName.toLowerCase().includes('smite') ||
+     p.summonerSpells.summonerSpellOne.displayName.toLowerCase().includes('castigo') ||
+     p.summonerSpells.summonerSpellTwo.displayName.toLowerCase().includes('smite') ||
+     p.summonerSpells.summonerSpellTwo.displayName.toLowerCase().includes('castigo'))
+  );
+
+  if (enemyJunglerDead && gameTime < 1200) {
+    return {
+      phase: 'laning',
+      confidence: 0.75,
+      context: 'Enemy jungler is dead - safe to play aggressive',
+      adviceStyle: 'aggressive',
+    };
+  }
+
   // Default: general macro phase
   if (gameTime < 900) {
     return {

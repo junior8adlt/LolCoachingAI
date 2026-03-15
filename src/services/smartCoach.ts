@@ -161,18 +161,32 @@ function assessFightPotential(
     }
   }
 
+  // ── Tower safety: enemy might be under tower ──
+  // If enemy has low CS relative to game time = they're farming safe = likely near tower
+  // If enemy just respawned = walking back to lane = near tower soon
+  const enemyCSPerMin = _gameTime > 60 ? (enemy.scores.creepScore / (_gameTime / 60)) : 0;
+  const enemyPlayingSafe = enemyCSPerMin < 4 && _gameTime > 300; // Very low CS = hiding under tower
+  const enemyJustRespawned = enemy.respawnTimer === 0 && enemy.scores.deaths > 0;
+
+  if (enemyPlayingSafe || enemyJustRespawned) {
+    score -= 8; // Reduce confidence when enemy might be under tower
+    reasons.push('enemy may be near tower');
+  }
+
   // ── Build reason string ──
   const topReasons = reasons.slice(0, 3).join(', ');
 
-  // ── Determine action ──
+  // ── Determine action (with tower-aware output) ──
+  const towerWarning = (enemyPlayingSafe || enemyJustRespawned) ? ' (don\'t dive)' : '';
+
   if (score >= 72) {
-    return { canWin: true, confidence: 0.85, reason: `Big advantage: ${topReasons}`, action: 'all-in' };
+    return { canWin: true, confidence: 0.85, reason: `Big advantage: ${topReasons}${towerWarning}`, action: 'all-in' };
   }
   if (score >= 62) {
-    return { canWin: true, confidence: 0.7, reason: topReasons || 'You have an advantage', action: 'fight' };
+    return { canWin: true, confidence: 0.7, reason: (topReasons || 'You have an advantage') + towerWarning, action: 'fight' };
   }
   if (score >= 53) {
-    return { canWin: true, confidence: 0.55, reason: topReasons || 'Slightly favored', action: 'trade' };
+    return { canWin: true, confidence: 0.55, reason: (topReasons || 'Slightly favored') + towerWarning, action: 'trade' };
   }
   if (score >= 45) {
     return { canWin: false, confidence: 0.5, reason: topReasons || 'Even matchup', action: 'poke' };

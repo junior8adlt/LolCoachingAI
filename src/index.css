@@ -195,6 +195,41 @@ html, body, #root {
   text-shadow: 0 0 8px rgba(255, 215, 0, 0.5);
 }
 
+/* ── Coach Banner Animations ── */
+@keyframes coach-enter {
+  0% { transform: translateY(-20px) scale(0.95); opacity: 0; }
+  60% { transform: translateY(3px) scale(1.01); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes coach-exit {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-15px); opacity: 0; }
+}
+
+@keyframes coach-shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 50%, 90% { transform: translateX(-2px); }
+  30%, 70% { transform: translateX(2px); }
+}
+
+@keyframes coach-progress {
+  0% { width: 100%; }
+  100% { width: 0%; }
+}
+
+.coach-banner-enter {
+  animation: coach-enter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.coach-banner-exit {
+  animation: coach-exit 0.5s ease-in forwards;
+}
+
+.coach-banner-shake {
+  animation: coach-shake 0.5s ease-in-out;
+}
+
 /* ── Grade Colors ── */
 .grade-s { color: #ffd700; text-shadow: 0 0 10px rgba(255, 215, 0, 0.6); }
 .grade-a { color: #00ff87; text-shadow: 0 0 8px rgba(0, 255, 135, 0.4); }
