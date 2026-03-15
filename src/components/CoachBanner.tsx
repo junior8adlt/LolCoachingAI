@@ -11,9 +11,27 @@ type BannerIntent = 'aggressive' | 'danger' | 'info' | 'opportunity';
 function getIntent(tip: CoachingTip): BannerIntent {
   const msg = tip.message.toLowerCase();
   if (tip.priority === 'danger') return 'danger';
-  if (msg.includes('kill') || msg.includes('all-in') || msg.includes('fight') || msg.includes('aggressive')) return 'aggressive';
-  if (msg.includes('advantage') || msg.includes('spike') || msg.includes('window') || msg.includes('flash down')) return 'opportunity';
+  if (msg.includes('kill') || msg.includes('all-in') || msg.includes('fight now') || msg.includes('play aggressive')) return 'aggressive';
+  if (msg.includes('advantage') || msg.includes('spike') || msg.includes('window') || msg.includes('flash down') || msg.includes('dead!')) return 'opportunity';
+  if (msg.includes('avoid') || msg.includes('don\'t') || msg.includes('safe') || msg.includes('behind') || msg.includes('disengage')) return 'danger';
   return 'info';
+}
+
+// Extract reasoning keywords from tip for the AI reasoning display
+function extractReasoning(tip: CoachingTip): string[] {
+  const reasons: string[] = [];
+  const msg = tip.message.toLowerCase();
+  if (msg.includes('level')) reasons.push('Level advantage');
+  if (msg.includes('item')) reasons.push('Item spike');
+  if (msg.includes('flash down')) reasons.push('Enemy flash down');
+  if (msg.includes('ult down')) reasons.push('Enemy ult down');
+  if (msg.includes('gold')) reasons.push('Gold lead');
+  if (msg.includes('wave')) reasons.push('Wave state');
+  if (msg.includes('dragon') || msg.includes('baron')) reasons.push('Objective timing');
+  if (msg.includes('dead')) reasons.push('Number advantage');
+  if (msg.includes('jungle') || msg.includes('gank')) reasons.push('Jungle tracking');
+  if (msg.includes('roam') || msg.includes('missing')) reasons.push('Roam detected');
+  return reasons.slice(0, 3);
 }
 
 const INTENT_STYLES: Record<BannerIntent, {
@@ -121,6 +139,7 @@ export function CoachBanner() {
   if (!banner.tip || !banner.visible) return null;
 
   const s = INTENT_STYLES[banner.intent];
+  const reasoning = banner.tip ? extractReasoning(banner.tip) : [];
   const myChampion = gameData?.allPlayers.find(
     (p) => p.summonerName === activePlayer?.summonerName
   )?.championName;
@@ -167,7 +186,18 @@ export function CoachBanner() {
              style={{ textShadow: '0 1px 8px rgba(0,0,0,0.4)' }}>
             {banner.tip.message}
           </p>
-          <div className="flex items-center gap-3 mt-1.5">
+          {/* AI Reasoning chain (shows WHY the coach said this) */}
+          {reasoning.length > 0 && (
+            <div className="flex items-center gap-2 mt-1.5">
+              {reasoning.map((r, i) => (
+                <span key={i} className="text-[7px] text-gray-500/50 uppercase tracking-wider flex items-center gap-1">
+                  {i > 0 && <span className="text-gray-600/30">→</span>}
+                  {r}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-3 mt-1">
             <span className="text-[8px] text-gray-500/60 uppercase tracking-wider">
               {banner.tip.category}
             </span>

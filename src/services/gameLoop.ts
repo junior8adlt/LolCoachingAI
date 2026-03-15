@@ -18,6 +18,9 @@ import { predictEnemyIntents, getHighestThreatIntent, generateIntentTip } from '
 import { evaluateCombat, generateCombatTip } from './combatEvaluator';
 import { updateTeamfightState, generateTeamfightTip } from './teamfightEngine';
 import { analyzeStrategy, generateStrategyTip } from './winConditionEngine';
+import { assessPosition, generatePositionTip } from './positioningEngine';
+import { buildGameContext, getRotationCall, generateRotationTip } from './gameContext';
+import { updateRoamTracking, getRoamPredictions, generateRoamTip } from './roamPredictor';
 import { updateCooldowns, getKillWindow } from './cooldownTracker';
 import { getEnemyHPEstimate, isEnemyLow, isEnemyVeryLow, initScreenReader } from './screenReader';
 import { pickBestAdvice, setGameStartTime } from './advicePriority';
@@ -540,6 +543,42 @@ async function processGameState(data: AllGameData): Promise<void> {
       const diveTip = getDiveTip(myHPPercent, laneOpponent, true, gameTime);
       if (diveTip) allCandidateTips.push(diveTip);
     }
+  }
+
+  // ── Positioning Engine ──
+  if (myPlayer && gameTime > 120) {
+    // Pass recent death EVENTS (not analyses) for positioning
+    const myDeathEvents = data.events.Events.filter(
+      (e) => e.EventName === 'ChampionKill' && e.VictimName === data.activePlayer.summonerName
+    );
+    const posAssessment = assessPosition(
+      myPlayer, data.activePlayer, waveInfo, junglePrediction,
+      visionAnalysis, gameTime, myDeathEvents
+    );
+    const posTip = generatePositionTip(posAssessment);
+    if (posTip) allCandidateTips.push(posTip);
+  }
+
+  // ── Roam Prediction ──
+  updateRoamTracking(data.allPlayers, data.events.Events, gameTime);
+  if (myPlayer && gameTime > 300) {
+    const roamPredictions = getRoamPredictions(myPlayer, gameTime);
+    for (const pred of roamPredictions) {
+      const roamTip = generateRoamTip(pred);
+      if (roamTip) { allCandidateTips.push(roamTip); break; } // Only top roam warning
+    }
+  }
+
+  // ── Game Context + Rotation Engine ──
+  if (myPlayer && gameTime > 600) {
+    const ctx = buildGameContext(
+      data.allPlayers, myPlayer, data.activePlayer,
+      data.events.Events, gameTime, store.objectives, junglePrediction
+    );
+    const myRole = myPlayer.position?.toUpperCase() ?? 'MIDDLE';
+    const rotation = getRotationCall(ctx, myRole, waveInfo.state as any);
+    const rotTip = generateRotationTip(rotation);
+    if (rotTip) allCandidateTips.push(rotTip);
   }
 
   // ── Intent Engine (predict enemy actions) ──
