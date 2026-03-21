@@ -223,6 +223,59 @@ async def ask_coach(request: dict[str, Any]) -> dict[str, Any]:
     return await ai_coach.answer_question(question, state, language)
 
 
+@app.post("/api/transcribe")
+async def transcribe_audio(request: dict[str, Any]) -> dict[str, Any]:
+    """Transcribe audio from the overlay mic. Converts WebM to WAV then uses Google STT."""
+    import base64
+    import tempfile
+    import os
+    import speech_recognition as sr
+    from pydub import AudioSegment
+
+    audio_b64 = request.get("audio", "")
+    lang = request.get("language", "es-MX")
+
+    if not audio_b64:
+        return {"text": "", "error": "No audio data"}
+
+    try:
+        audio_bytes = base64.b64decode(audio_b64)
+
+        # Save raw audio (WebM from MediaRecorder)
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+            f.write(audio_bytes)
+            webm_path = f.name
+
+        # Convert WebM to WAV using pydub + ffmpeg
+        wav_path = webm_path.replace(".webm", ".wav")
+        audio_segment = AudioSegment.from_file(webm_path, format="webm")
+        audio_segment.export(wav_path, format="wav")
+
+        # Transcribe with Google Speech Recognition (free, no API key)
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio = recognizer.record(source)
+
+        text = recognizer.recognize_google(audio, language=lang)
+        logger.info("Transcribed: %s", text)
+
+        # Cleanup temp files
+        try:
+            os.unlink(webm_path)
+            os.unlink(wav_path)
+        except Exception:
+            pass
+
+        return {"text": text}
+    except sr.UnknownValueError:
+        return {"text": "", "error": "Could not understand audio"}
+    except sr.RequestError as e:
+        return {"text": "", "error": f"Speech service error: {e}"}
+    except Exception as e:
+        logger.error("Transcription error: %s", e)
+        return {"text": "", "error": str(e)}
+
+
 @app.post("/api/coaching/post-game", response_model=PostGameResponse)
 async def post_game_report(request: PostGameRequest) -> PostGameResponse:
     return await ai_coach.generate_post_game_report(

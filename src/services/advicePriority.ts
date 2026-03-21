@@ -1,113 +1,135 @@
 import type { CoachingTip } from '../types/coaching';
 
 // ── Advice Priority Engine ──
-// A central brain that picks THE MOST IMPORTANT tip to show.
-// A real coach says ONE thing at a time, not 5 things simultaneously.
+// Central brain: picks THE BEST tip. Strong anti-repetition.
 
-// Priority tiers (highest = most important)
 const PRIORITY_TIERS: Record<string, number> = {
-  // Tier 1: Immediate action required (life or death)
-  'kill_window': 100,      // Enemy has no flash/ult - GO
-  'danger_immediate': 95,  // You're about to die
-  'objective_now': 90,     // Dragon/Baron spawning NOW
-
-  // Tier 2: Tactical advantage
-  'fight_advantage': 80,   // You win this fight, take it
-  'cooldown_window': 75,   // Enemy flash/ult down
-  'level_spike': 70,       // You just power spiked
-
-  // Tier 3: Strategic
-  'wave_action': 60,       // Crash wave, freeze, etc.
-  'build_urgent': 55,      // Anti-heal needed urgently
-  'recall_timing': 50,     // Good recall window
-
-  // Tier 4: Informational
-  'matchup_tip': 40,       // Champion-specific advice
-  'build_suggestion': 35,  // General build tip
-  'vision_reminder': 30,   // Ward up
-
-  // Tier 5: Background coaching
-  'mechanics_tip': 20,     // Animation cancel, spacing
-  'general_tip': 10,       // Generic coaching
+  'kill_window': 100,
+  'danger_immediate': 95,
+  'objective_now': 90,
+  'fight_advantage': 80,
+  'cooldown_window': 75,
+  'level_spike': 70,
+  'wave_action': 60,
+  'build_urgent': 55,
+  'recall_timing': 50,
+  'matchup_tip': 40,
+  'build_suggestion': 35,
+  'vision_reminder': 30,
+  'mechanics_tip': 20,
+  'general_tip': 10,
 };
 
-// Map tip categories + priorities to tier scores
 function scoreTip(tip: CoachingTip): number {
   let score = 0;
-
-  // Priority boost
   if (tip.priority === 'danger') score += 50;
   else if (tip.priority === 'warning') score += 25;
   else score += 5;
 
-  // Category scoring
   const msg = tip.message.toLowerCase();
-
-  // Kill windows (highest value)
-  if (msg.includes('kill window') || msg.includes('flash down') || msg.includes('ult down')) {
+  if (msg.includes('kill window') || msg.includes('flash down') || msg.includes('ult down') || msg.includes('all-in now')) {
     score += PRIORITY_TIERS['kill_window'];
-  }
-  // Fight advantage
-  else if (msg.includes('you win') || msg.includes('all-in') || msg.includes('advantage') || msg.includes('power spike')) {
+  } else if (msg.includes('you win') || msg.includes('advantage') || msg.includes('power spike')) {
     score += PRIORITY_TIERS['fight_advantage'];
-  }
-  // Objective
-  else if (msg.includes('dragon') || msg.includes('baron') || msg.includes('herald') || msg.includes('objective')) {
+  } else if (msg.includes('baron') || msg.includes('dragon') || msg.includes('herald') || msg.includes('objective')) {
     score += PRIORITY_TIERS['objective_now'];
-  }
-  // Wave
-  else if (msg.includes('wave') || msg.includes('push') || msg.includes('crash') || msg.includes('freeze')) {
+  } else if (msg.includes('wave') || msg.includes('push') || msg.includes('crash') || msg.includes('freeze')) {
     score += PRIORITY_TIERS['wave_action'];
-  }
-  // Build
-  else if (msg.includes('build') || msg.includes('buy') || msg.includes('anti-heal') || msg.includes('armor') || msg.includes('mr ')) {
+  } else if (msg.includes('build') || msg.includes('buy') || msg.includes('anti-heal')) {
     score += PRIORITY_TIERS['build_suggestion'];
-  }
-  // Recall
-  else if (msg.includes('recall') || msg.includes('gold')) {
+  } else if (msg.includes('recall') || msg.includes('gold')) {
     score += PRIORITY_TIERS['recall_timing'];
-  }
-  // Vision
-  else if (msg.includes('ward') || msg.includes('vision')) {
+  } else if (msg.includes('ward') || msg.includes('vision')) {
     score += PRIORITY_TIERS['vision_reminder'];
-  }
-  // Combo/mechanics
-  else if (msg.includes('combo') || msg.includes('cancel') || msg.includes('spacing')) {
-    score += PRIORITY_TIERS['mechanics_tip'];
-  }
-  // Matchup
-  else if (tip.category === 'matchup' || tip.category === 'trading') {
+  } else if (tip.category === 'matchup' || tip.category === 'trading') {
     score += PRIORITY_TIERS['matchup_tip'];
-  }
-  // Default
-  else {
+  } else {
     score += PRIORITY_TIERS['general_tip'];
   }
-
   return score;
 }
 
-// ── Main function: pick the best tip(s) ──
+// ── Anti-Repetition System ──
+// Track TOPICS not exact messages. "Dragon is up" and "Dragon alive, contest" are the SAME topic.
+
+type TopicKey = string;
+
+function extractTopic(tip: CoachingTip): TopicKey {
+  const msg = tip.message.toLowerCase();
+
+  // Map messages to broad topics
+  if (msg.includes('dragon')) return 'dragon';
+  if (msg.includes('baron')) return 'baron';
+  if (msg.includes('herald') || msg.includes('rift')) return 'herald';
+  if (msg.includes('cs') || msg.includes('farm') || msg.includes('last hit') || msg.includes('cs/min')) return 'farming';
+  if (msg.includes('ward') || msg.includes('vision')) return 'vision';
+  if (msg.includes('recall') || msg.includes('gold') || msg.includes('unspent')) return 'recall';
+  if (msg.includes('missing') || msg.includes('roam')) return 'roam';
+  if (msg.includes('gank') || msg.includes('jungle')) return 'jungle';
+  if (msg.includes('flash down') || msg.includes('ult down')) return 'cooldowns';
+  if (msg.includes('kill') || msg.includes('all-in')) return 'kill_window';
+  if (msg.includes('team') || msg.includes('group') || msg.includes('5v')) return 'teamfight';
+  if (msg.includes('overextend') || msg.includes('too far') || msg.includes('safe')) return 'positioning';
+  if (msg.includes('wave') || msg.includes('push') || msg.includes('freeze')) return 'wave';
+  if (msg.includes('build') || msg.includes('buy') || msg.includes('item')) return 'build';
+  if (msg.includes('rotate') || msg.includes('objective')) return 'rotation';
+  if (msg.includes('advantage') || msg.includes('spike')) return 'advantage';
+
+  return `cat_${tip.category}`;
+}
+
+// Topic cooldowns: how long before the same topic can appear again
+const TOPIC_COOLDOWNS: Record<string, number> = {
+  dragon: 90000,       // 1.5 min - don't spam dragon
+  baron: 90000,
+  herald: 90000,
+  farming: 180000,     // 3 min - CS tips are the most annoying
+  vision: 120000,      // 2 min
+  recall: 60000,       // 1 min
+  roam: 45000,         // 45s - roam warnings are time-sensitive
+  jungle: 60000,       // 1 min
+  cooldowns: 30000,    // 30s - cooldown windows are urgent
+  kill_window: 20000,  // 20s - kill windows are highest value
+  teamfight: 30000,    // 30s
+  positioning: 90000,  // 1.5 min
+  wave: 90000,         // 1.5 min
+  build: 120000,       // 2 min
+  rotation: 60000,     // 1 min
+  advantage: 60000,    // 1 min
+};
+
+const topicLastShown = new Map<TopicKey, number>();
+
+function isTopicOnCooldown(topic: TopicKey): boolean {
+  const lastTime = topicLastShown.get(topic);
+  if (!lastTime) return false;
+  const cooldown = TOPIC_COOLDOWNS[topic] ?? 60000;
+  return Date.now() - lastTime < cooldown;
+}
+
+function markTopicShown(topic: TopicKey): void {
+  topicLastShown.set(topic, Date.now());
+}
+
+// ── Main ──
 
 let lastAdviceTime = 0;
-let lastAdviceMessage = '';
-const MIN_ADVICE_INTERVAL = 15000;   // 15s between tips - a real coach doesn't talk every 5s
-const BASE_SCORE_THRESHOLD = 35;     // Early game threshold (more guidance needed)
-const LATE_SCORE_THRESHOLD = 55;     // Late game threshold (player knows the game, only high-value tips)
+const MIN_ADVICE_INTERVAL = 12000; // 12s between ANY tips
+const BASE_SCORE_THRESHOLD = 40;
+const LATE_SCORE_THRESHOLD = 55;
 let gameStartTime = 0;
 
 export function setGameStartTime(time: number): void {
   gameStartTime = time;
 }
 
-// Dynamic threshold: more tips early, fewer late
 function getScoreThreshold(): number {
   const elapsed = Date.now() - gameStartTime;
   const minutes = elapsed / 60000;
-  if (minutes < 10) return BASE_SCORE_THRESHOLD;    // Early: more coaching
-  if (minutes < 20) return BASE_SCORE_THRESHOLD + 8; // Mid: moderate
-  if (minutes < 30) return BASE_SCORE_THRESHOLD + 15; // Late: only important stuff
-  return LATE_SCORE_THRESHOLD;                        // Very late: almost silent unless critical
+  if (minutes < 10) return BASE_SCORE_THRESHOLD;
+  if (minutes < 20) return BASE_SCORE_THRESHOLD + 8;
+  if (minutes < 30) return BASE_SCORE_THRESHOLD + 15;
+  return LATE_SCORE_THRESHOLD;
 }
 
 export function pickBestAdvice(
@@ -116,9 +138,8 @@ export function pickBestAdvice(
 ): CoachingTip[] {
   const now = Date.now();
 
-  // Don't spam - minimum 15s between advice
+  // Min interval between any tips
   if (now - lastAdviceTime < MIN_ADVICE_INTERVAL) {
-    // Exception: DANGER tips cut through the silence
     const dangerOnly = candidates.filter((t) => t.priority === 'danger');
     if (dangerOnly.length === 0) return [];
     candidates = dangerOnly;
@@ -126,37 +147,32 @@ export function pickBestAdvice(
 
   if (candidates.length === 0) return [];
 
-  // Score all candidates
-  const scored = candidates.map((tip) => ({
-    tip,
-    score: scoreTip(tip),
-  }));
+  // Score and filter by topic cooldown
+  const scored = candidates
+    .map((tip) => ({ tip, score: scoreTip(tip), topic: extractTopic(tip) }))
+    .filter(({ topic }) => !isTopicOnCooldown(topic))  // BLOCK topics on cooldown
+    .sort((a, b) => b.score - a.score);
 
-  // Sort by score descending
-  scored.sort((a, b) => b.score - a.score);
+  if (scored.length === 0) return [];
 
-  // ── SILENCE: if nothing is important enough, say NOTHING ──
-  // Dynamic threshold: coach talks more early, less late
   const threshold = getScoreThreshold();
-  if (scored[0].score < threshold) {
-    return [];
-  }
+  if (scored[0].score < threshold) return [];
 
-  // Pick top N, filter duplicates
   const result: CoachingTip[] = [];
-  for (const { tip, score } of scored) {
+  const usedTopics = new Set<string>();
+
+  for (const { tip, score, topic } of scored) {
     if (result.length >= maxTips) break;
     if (score < threshold) break;
-
-    // Skip if too similar to last advice
-    if (tip.message.slice(0, 30) === lastAdviceMessage.slice(0, 30)) continue;
+    if (usedTopics.has(topic)) continue; // Don't show 2 tips about same topic
 
     result.push(tip);
+    usedTopics.add(topic);
+    markTopicShown(topic);
   }
 
   if (result.length > 0) {
     lastAdviceTime = now;
-    lastAdviceMessage = result[0].message;
   }
 
   return result;
@@ -164,5 +180,6 @@ export function pickBestAdvice(
 
 export function resetPriorityEngine(): void {
   lastAdviceTime = 0;
-  lastAdviceMessage = '';
+  topicLastShown.clear();
+  gameStartTime = 0;
 }

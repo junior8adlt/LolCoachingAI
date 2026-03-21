@@ -1,13 +1,14 @@
 import { useGameStore } from '../stores/gameStore';
 import { getAllGameData, isGameRunning } from './riotApi';
 import { analyzeGameState } from './gameAnalyzer';
-import { getCoachingAdvice, getMatchupAnalysis, generatePostGameCoaching, checkBackendSource } from './aiCoach';
+import { getMatchupAnalysis, generatePostGameCoaching, checkBackendSource } from './aiCoach';
+// claudeCoach used by voiceInput.ts for on-demand coaching
 import { updateTracking, getJungleCoachingTip } from './jungleTracker';
 import { updateWaveState, getWaveCoachingTip, shouldRecallBasedOnWave } from './waveEngine';
 import { saveGameRecord, getProfileBasedTip, getPlayerProfile, classifyDeathCause } from './playerProfile';
 import { analyzeVision } from './visionTracker';
 import { analyzePlayerDeath, detectDeathPatterns, type DeathAnalysisResult } from './deathAnalyzer';
-import { getChampionPowerSpikeTip, getChampionTradingTip, getChampionCoaching, getChampionCombo } from '../data/championCoaching';
+import { getChampionPowerSpikeTip, getChampionTradingTip, getChampionCoaching } from '../data/championCoaching';
 import { getChampionMechanics } from '../data/championMechanics';
 import { getSmartCoachingTips } from './smartCoach';
 import { detectPhase } from './gamePhaseEngine';
@@ -21,24 +22,27 @@ import { analyzeStrategy, generateStrategyTip } from './winConditionEngine';
 import { assessPosition, generatePositionTip } from './positioningEngine';
 import { buildGameContext, getRotationCall, generateRotationTip } from './gameContext';
 import { updateRoamTracking, getRoamPredictions, generateRoamTip } from './roamPredictor';
+import { triggerDeathReview } from './voiceInput';
 import { detectTempoAdvantage, generateTempoTip } from './tempoEngine';
 import { generateDamageTip, calculateDamage, predictFightOutcome, generateFightPredictionTip, getObjectiveSetup, generateObjectiveSetupTip } from './damageModel';
-import { updateCooldowns, getKillWindow } from './cooldownTracker';
+import { buildReasoning, type GameSignals } from './coachingReasoning';
+import { predictUpcomingDecisions, generateTimingTip, getFocusObjective, generateFocusTip } from './decisionTiming';
+import { updateCooldowns, getKillWindow, getEnemyCooldowns } from './cooldownTracker';
 import { getEnemyHPEstimate, isEnemyLow, isEnemyVeryLow, initScreenReader } from './screenReader';
-import { pickBestAdvice, setGameStartTime } from './advicePriority';
-import { speakTip, speakRaw } from './voiceCoach';
-import { t } from './i18n';
+import { setGameStartTime } from './advicePriority';
+// Voice disabled in gameLoop - Claude handles speech via voiceInput
+// i18n used by voiceInput
 import type { AllGameData, GameEvent } from '../types/game';
 import type { GamePhase } from '../types/coaching';
 
 const POLL_INTERVAL = 1500;
-const AI_COACH_INTERVAL = 5000;
+// AI_COACH_INTERVAL removed - Claude only on demand
 
 let pollTimerId: ReturnType<typeof setInterval> | null = null;
 let aiCoachTimerId: ReturnType<typeof setInterval> | null = null;
 let previousEvents: GameEvent[] = [];
 let wasGameRunning = false;
-let lastAICoachTime = 0;
+// lastAICoachTime removed - no auto polling
 let latestGameData: AllGameData | null = null;
 let processedDeathEvents: Set<number> = new Set();
 let deathAnalyses: DeathAnalysisResult[] = [];
@@ -75,7 +79,7 @@ function onGameStart(): void {
   setGameStartTime(Date.now());
 
   previousEvents = [];
-  lastAICoachTime = 0;
+  // Claude coach is on-demand only
   latestGameData = null;
   processedDeathEvents = new Set();
   deathAnalyses = [];
@@ -83,7 +87,18 @@ function onGameStart(): void {
   lastChampionTipTime = 0;
   wasGameRunning = true;
 
-  speakRaw(t('ui_analyzing_matchup'));
+  // Silent start - Claude coaches on demand only
+
+  // Check if Claude backend is available
+  checkBackendSource().then((src) => {
+    store.setAIState({ ...store.aiState, source: src });
+    if (src === 'claude') {
+      console.log('[GameLoop] Claude is online - coach mode: voice-activated');
+    } else {
+      console.log('[GameLoop] Claude offline - coach mode: local fallback');
+    }
+  });
+
   console.log('[GameLoop] Game started. Initializing coaching session.');
 }
 
@@ -247,7 +262,7 @@ async function processGameState(data: AllGameData): Promise<void> {
 
   for (const deathEvent of myDeaths) {
     processedDeathEvents.add(deathEvent.EventID);
-    const { analysis, tip } = analyzePlayerDeath(
+    const { analysis } = analyzePlayerDeath(
       deathEvent,
       data.allPlayers,
       data.activePlayer,
@@ -256,14 +271,14 @@ async function processGameState(data: AllGameData): Promise<void> {
       gameTime
     );
     deathAnalyses.push(analysis);
-    // Death analysis goes directly - it's event-driven and always important
-    store.addCoachingTip(tip);
-    speakTip(tip);
+
+    // Trigger Claude to review the death (the ONLY auto-Claude trigger)
+    triggerDeathReview(analysis.explanation, analysis.killerChampion);
 
     const patternTip = detectDeathPatterns(deathAnalyses, gameTime);
     if (patternTip) {
-      store.addCoachingTip(patternTip);
-      speakTip(patternTip);
+      // tips disabled - silent mode
+      // speech disabled
     }
   }
 
@@ -320,20 +335,7 @@ async function processGameState(data: AllGameData): Promise<void> {
         });
       }
 
-      // At key levels, also give combo reminder
-      if ([2, 3, 6].includes(currentLevel)) {
-        const combo = getChampionCombo(myChampion);
-        if (combo) {
-          store.addCoachingTip({
-            id: `champ-combo-${now}`,
-            message: `Your combo: ${combo}`,
-            priority: 'info' as const,
-            category: 'matchup' as const,
-            timestamp: now,
-            dismissed: false,
-          });
-        }
-      }
+      // Combo reminders disabled - Claude handles coaching on demand
     }
     lastPlayerLevel = currentLevel;
 
@@ -385,8 +387,9 @@ async function processGameState(data: AllGameData): Promise<void> {
         }
       }
 
+      // Visual tip only (no voice) - rotates in banner
       if (tipMessage) {
-        store.addCoachingTip({
+        allCandidateTips.push({
           id: `champ-tip-${now}`,
           message: tipMessage,
           priority: 'info' as const,
@@ -395,38 +398,6 @@ async function processGameState(data: AllGameData): Promise<void> {
           dismissed: false,
         });
         lastChampionTipTime = now;
-      }
-    }
-
-    // Mid/late game strategy reminder (once per phase transition)
-    if (gameTime >= 900 && gameTime < 920) {
-      const coaching = getChampionCoaching(myChampion);
-      if (coaching) {
-        const tip = {
-          id: `champ-midgame-${now}`,
-          message: coaching.midGame,
-          priority: 'info' as const,
-          category: 'macro' as const,
-          timestamp: now,
-          dismissed: false,
-        };
-        store.addCoachingTip(tip);
-        speakTip(tip);
-      }
-    }
-    if (gameTime >= 1800 && gameTime < 1820) {
-      const coaching = getChampionCoaching(myChampion);
-      if (coaching) {
-        const tip = {
-          id: `champ-lategame-${now}`,
-          message: coaching.lateGame,
-          priority: 'info' as const,
-          category: 'macro' as const,
-          timestamp: now,
-          dismissed: false,
-        };
-        store.addCoachingTip(tip);
-        speakTip(tip);
       }
     }
   }
@@ -664,48 +635,103 @@ async function processGameState(data: AllGameData): Promise<void> {
     if (stratTip) allCandidateTips.push(stratTip);
   }
 
-  // ── Priority Engine: pick THE BEST tip to show ──
-  const bestTips = pickBestAdvice(allCandidateTips, 2); // max 2 tips at a time
-  for (const tip of bestTips) {
-    store.addCoachingTip(tip);
-    speakTip(tip);
+  // ── Coaching Reasoning Engine (connects signals into chains) ──
+  if (myPlayer && gameTime > 90) {
+    const signals: GameSignals = {
+      jungleSide: junglePrediction?.predictedSide ?? null,
+      jungleConfidence: junglePrediction?.confidence ?? 0,
+      waveState: waveInfo?.state ?? 'unknown',
+      levelAdvantage: (data.activePlayer.level) - (laneOpponent?.level ?? data.activePlayer.level),
+      itemAdvantage: (myPlayer.items.filter((i: {price:number}) => i.price >= 2500).length) -
+        (laneOpponent?.items.filter((i: {price:number}) => i.price >= 2500).length ?? 0),
+      enemyFlashDown: false, // set below
+      enemyUltDown: false,
+      objectiveSpawningSoon: store.objectives.some((o) => o.status === 'dead' && o.timer > 0 && o.timer <= 60),
+      objectiveName: store.objectives.find((o) => o.status === 'dead' && o.timer > 0 && o.timer <= 60)?.type ?? null,
+      numberAdvantage: data.allPlayers.filter((p) => p.team === myPlayer!.team && !p.isDead).length -
+        data.allPlayers.filter((p) => p.team !== myPlayer!.team && !p.isDead).length,
+      enemyHPLow: false, // from screen reader
+      visionQuality: visionAnalysis.visionQuality,
+      myHPPercent: data.activePlayer.championStats.currentHealth / data.activePlayer.championStats.maxHealth,
+      gameTime,
+    };
+
+    // Fill cooldown signals
+    if (laneOpponent) {
+      const cd = getEnemyCooldowns(laneOpponent.summonerName);
+      if (cd) {
+        signals.enemyFlashDown = cd.flashDown;
+        signals.enemyUltDown = cd.ultDown;
+      }
+    }
+
+    const reasoning = buildReasoning(signals);
+    if (reasoning && reasoning.confidence > 0.5) {
+      allCandidateTips.push({
+        id: `reason-${Date.now()}`,
+        message: `${reasoning.conclusion}. ${reasoning.action}`,
+        priority: reasoning.confidence > 0.7 ? 'warning' : 'info',
+        category: reasoning.category === 'trade' ? 'trading' : reasoning.category === 'safety' ? 'positioning' : 'macro',
+        timestamp: Date.now(),
+        dismissed: false,
+      });
+
+      // Update AI thinking panel with reasoning chain
+      store.setAIState({
+        status: 'coaching',
+        currentThought: reasoning.action,
+        reasoningChain: [reasoning.situation, ...reasoning.signals, `→ ${reasoning.conclusion}`],
+      });
+    }
+  }
+
+  // ── Decision Timing (predictive tips) ──
+  if (gameTime > 120) {
+    const enemyCDs = laneOpponent ? getEnemyCooldowns(laneOpponent.summonerName) : null;
+    const decisions = predictUpcomingDecisions(
+      gameTime, store.objectives, junglePrediction,
+      enemyCDs ? [enemyCDs] : [],
+      (waveInfo?.state ?? 'unknown') as any, data.activePlayer.level
+    );
+    for (const dec of decisions.slice(0, 1)) { // Only top decision
+      const timingTip = generateTimingTip(dec);
+      if (timingTip) allCandidateTips.push(timingTip);
+    }
+  }
+
+  // ── Focus Mode (1 improvement objective) ──
+  if (gameTime > 60 && gameTime % 300 < 5) { // Every 5 minutes
+    const playerProfile = getPlayerProfile();
+    const weaknesses = playerProfile.weaknesses.map((w) => w.type) as any;
+    const currentStats = {
+      csPerMin: analysisResult.farmingStats.csPerMin,
+      deaths: myPlayer?.scores.deaths ?? 0,
+      visionPerMin: (myPlayer?.scores.wardScore ?? 0) / Math.max(1, gameTime / 60),
+      wardsPlaced: myPlayer?.scores.wardScore ?? 0,
+      killParticipation: 0,
+      soloDeaths: 0,
+    };
+    const focus = getFocusObjective(gameTime, weaknesses, currentStats as any);
+    const focusTip = generateFocusTip(focus);
+    if (focusTip) allCandidateTips.push(focusTip);
+  }
+
+  // ── Visual tips rotate in banner (NO voice) ──
+  // Show 1 best tip visually. NO speech - Claude handles voice on demand.
+  if (allCandidateTips.length > 0) {
+    const sorted = allCandidateTips.sort((a, b) => {
+      const prio: Record<string, number> = { danger: 3, warning: 2, info: 1 };
+      return (prio[b.priority] ?? 0) - (prio[a.priority] ?? 0);
+    });
+    // Add top tip to store for banner display
+    store.addCoachingTip(sorted[0]);
   }
 
   previousEvents = [...data.events.Events];
   latestGameData = data;
 }
 
-async function sendToAICoach(data: AllGameData): Promise<void> {
-  const store = useGameStore.getState();
-  const now = Date.now();
-
-  if (now - lastAICoachTime < AI_COACH_INTERVAL) {
-    return;
-  }
-
-  lastAICoachTime = now;
-  const source = await checkBackendSource();
-  store.setAIState({ status: 'thinking', currentThought: 'Analyzing game state...', source });
-
-  try {
-    const tips = await getCoachingAdvice(data);
-    for (const tip of tips) {
-      store.addCoachingTip(tip);
-      speakTip(tip);
-    }
-    store.setAIState({ status: 'coaching', currentThought: 'Analysis complete.', source });
-  } catch (error) {
-    console.error('[GameLoop] AI coach error:', error);
-    store.setAIState({ status: 'idle', currentThought: 'AI analysis unavailable.' });
-  }
-
-  setTimeout(() => {
-    const current = useGameStore.getState().aiState;
-    if (current.status === 'coaching') {
-      store.setAIState({ status: 'idle', currentThought: '' });
-    }
-  }, 3000);
-}
+// sendToAICoach removed - Claude only speaks when player asks (F8) or on death
 
 async function pollTick(): Promise<void> {
   try {
@@ -728,7 +754,8 @@ async function pollTick(): Promise<void> {
 
     await processGameState(data);
 
-    await sendToAICoach(data);
+    // Claude only speaks when player asks (F8) or on death events
+    // No more automatic 12s polling - engines gather data silently
   } catch (error) {
     if (wasGameRunning) {
       const errorMessage = error instanceof Error ? error.message : String(error);

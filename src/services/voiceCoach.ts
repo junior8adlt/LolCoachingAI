@@ -119,6 +119,44 @@ function getPreferredVoice(): SpeechSynthesisVoice | null {
   return fallback ?? voices[0] ?? null;
 }
 
+// Audio element for playing neural TTS mp3 files
+let audioElement: HTMLAudioElement | null = null;
+
+function initAudioPlayer(): void {
+  if (audioElement) return;
+
+  // Listen for TTS audio files from main process
+  const api = (window as unknown as {
+    electronAPI?: { onTTSAudio?: (cb: (path: string) => void) => () => void }
+  }).electronAPI;
+
+  if (api?.onTTSAudio) {
+    api.onTTSAudio((audioPath: string) => {
+      playAudioFile(audioPath);
+    });
+  }
+}
+
+function playAudioFile(filePath: string): void {
+  if (audioElement) {
+    audioElement.pause();
+  }
+  audioElement = new Audio(`file://${filePath}`);
+  audioElement.volume = config.volume;
+  audioElement.onended = () => {
+    isSpeaking = false;
+    setTimeout(() => processQueue(), 200);
+  };
+  audioElement.onerror = () => {
+    isSpeaking = false;
+    setTimeout(() => processQueue(), 200);
+  };
+  audioElement.play().catch(() => {
+    isSpeaking = false;
+    processQueue();
+  });
+}
+
 function processQueue(): void {
   if (!config.enabled || isSpeaking || speechQueue.length === 0) return;
 
@@ -127,6 +165,34 @@ function processQueue(): void {
 
   isSpeaking = true;
 
+  // Try neural TTS first (Microsoft Edge voices - sounds like a real person)
+  const api = (window as unknown as {
+    electronAPI?: { speakNeural?: (text: string, lang: string) => Promise<{ ok: boolean }> }
+  }).electronAPI;
+
+  if (api?.speakNeural) {
+    api.speakNeural(message, getLanguage()).then((result) => {
+      if (!result.ok) {
+        speakWithWebSpeech(message);
+      } else {
+        // Audio plays from main process - release speaking lock after estimated duration
+        const estimatedDuration = Math.max(2000, message.length * 80); // ~80ms per char
+        setTimeout(() => {
+          isSpeaking = false;
+          processQueue();
+        }, estimatedDuration);
+      }
+    }).catch(() => {
+      speakWithWebSpeech(message);
+    });
+    return;
+  }
+
+  // No neural TTS available, use Web Speech API
+  speakWithWebSpeech(message);
+}
+
+function speakWithWebSpeech(message: string): void {
   const utterance = new SpeechSynthesisUtterance(message);
   utterance.volume = config.volume;
   utterance.rate = config.rate;
@@ -216,8 +282,12 @@ export function setVoiceName(name: string): void {
   config.voiceName = name;
 }
 
-if (typeof window !== 'undefined' && window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = () => { /* voices loaded */ };
+if (typeof window !== 'undefined') {
+  if (window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = () => { /* voices loaded */ };
+  }
+  // Init neural TTS audio player
+  initAudioPlayer();
 }
 
 export const voiceCoach = {

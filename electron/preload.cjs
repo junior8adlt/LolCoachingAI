@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Force overlay on top
   forceOverlayShow: () => ipcRenderer.invoke("force-overlay-show"),
 
+  // Neural TTS (Microsoft Edge voices - sounds like a real person)
+  speakNeural: (text, lang) => ipcRenderer.invoke("speak-neural", text, lang || "es"),
+
   // Enemy HP from screen capture
   onEnemyHP: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -28,6 +31,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const handler = (_event, action) => callback(action);
     ipcRenderer.on("global-key", handler);
     return () => ipcRenderer.removeListener("global-key", handler);
+  },
+
+  // Receive TTS audio file to play
+  onTTSAudio: (callback) => {
+    const handler = (_event, audioPath) => callback(audioPath);
+    ipcRenderer.on("play-tts-audio", handler);
+    return () => ipcRenderer.removeListener("play-tts-audio", handler);
   },
 
   onOverlayToggled: (callback) => {

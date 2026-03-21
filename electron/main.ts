@@ -30,7 +30,7 @@ const isDev = !app.isPackaged;
 // ── Current keybind config (synced from renderer) ──
 let keybinds = {
   toggleOverlay: "F9",
-  pushToTalk: "Mouse5",
+  pushToTalk: "F8",
   toggleVoice: "F10",
 };
 
@@ -50,7 +50,7 @@ function createWindow(): void {
     resizable: false,
     movable: false,
     hasShadow: false,
-    focusable: false, // Don't steal focus from the game
+    focusable: true, // Must be true for drag/click to work on panels
     type: "toolbar",   // Helps with game overlay on Windows
     webPreferences: {
       preload: path.join(__dirname, "../electron/preload.cjs"),
@@ -62,6 +62,9 @@ function createWindow(): void {
 
   // Highest possible z-order for game overlays
   mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+
+  // Don't steal focus when shown - the game keeps focus
+  mainWindow.showInactive();
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
 
@@ -122,9 +125,19 @@ function registerGlobalShortcuts(): void {
     }
   }
 
-  // Push-to-talk: handled by iohook (supports both keydown AND keyup)
-  // No need for globalShortcut for PTT - iohook handles it with proper hold mode
-  console.log(`[Hotkey] PTT "${pttKey}" will be handled by iohook (hold mode)`);
+  // Push-to-talk: iohook handles hold mode (keydown+keyup).
+  // Also register globalShortcut as FALLBACK (toggle mode) in case iohook fails.
+  if (!pttKey.startsWith("Mouse")) {
+    try {
+      globalShortcut.register(normalizeForElectron(pttKey), () => {
+        // Toggle mode fallback: press to start, press again to stop
+        mainWindow?.webContents.send("global-key", "pushToTalk-toggle");
+      });
+      console.log(`[Hotkey] PTT "${pttKey}" registered as globalShortcut fallback (toggle mode)`);
+    } catch (e) {
+      console.error(`[Hotkey] Failed to register PTT fallback:`, e);
+    }
+  }
 
   // Start iohook for PTT (handles both mouse buttons and keyboard with keyup)
   startMousePolling();
@@ -185,6 +198,12 @@ function startMousePolling(): void {
     const pttBind = keybinds.pushToTalk;
     const isMouseBind = pttBind.startsWith("Mouse");
 
+    if (!isMouseBind) {
+      // Keyboard PTT uses globalShortcut, no need for iohook
+      console.log(`[iohook] Skipping - keyboard PTT uses globalShortcut`);
+      return;
+    }
+
     if (isMouseBind) {
       const targetButton = getIohookMouseButton(pttBind);
       if (!targetButton) {
@@ -210,25 +229,9 @@ function startMousePolling(): void {
         }
       });
     } else {
-      // Keyboard PTT with keyup support via iohook
-      const keycode = KEY_TO_IOHOOK[pttBind];
-      if (keycode) {
-        console.log(`[iohook] Listening for ${pttBind} (keycode ${keycode}) with keyup`);
-
-        iohook.on("keydown", (event: { keycode: number }) => {
-          if (event.keycode === keycode && !pttKeyDown) {
-            pttKeyDown = true;
-            mainWindow?.webContents.send("global-key", "pushToTalk-down");
-          }
-        });
-
-        iohook.on("keyup", (event: { keycode: number }) => {
-          if (event.keycode === keycode && pttKeyDown) {
-            pttKeyDown = false;
-            mainWindow?.webContents.send("global-key", "pushToTalk-up");
-          }
-        });
-      }
+      // Keyboard PTT: handled by globalShortcut (toggle mode), NOT iohook
+      // iohook keyboard conflicts with globalShortcut - only use iohook for mouse
+      console.log(`[iohook] Keyboard PTT "${pttBind}" handled by globalShortcut, not iohook`);
     }
 
     iohook.start();
@@ -453,6 +456,29 @@ function stopScreenCapture(): void {
   }
 }
 
+// ── Neural TTS (Microsoft Edge voices) ──
+
+let ttsReady = false;
+let MsEdgeTTS: any = null;
+let ttsInstance: any = null;
+
+let OUTPUT_FORMAT: any = null;
+
+async function initTTS(): Promise<void> {
+  try {
+    const msedge = require("msedge-tts");
+    MsEdgeTTS = msedge.MsEdgeTTS;
+    OUTPUT_FORMAT = msedge.OUTPUT_FORMAT;
+    ttsInstance = new MsEdgeTTS();
+    await ttsInstance.setMetadata("es-MX-DaliaNeural", OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+    ttsReady = true;
+    console.log("[TTS] Microsoft Edge neural voice initialized (es-MX-DaliaNeural)");
+  } catch (err) {
+    console.error("[TTS] Failed to init neural TTS:", err);
+    ttsReady = false;
+  }
+}
+
 // ── Riot API proxy (Node.js https, bypasses SSL issues) ──
 
 function riotApiFetch(endpoint: string): Promise<unknown> {
@@ -529,6 +555,38 @@ function registerIpcHandlers(): void {
   // Renderer requests current keybinds
   ipcMain.handle("get-keybinds", () => keybinds);
 
+  // Neural TTS - speak with Microsoft Edge voice
+  ipcMain.handle("speak-neural", async (_event, text: string, lang: string) => {
+    if (!ttsReady || !ttsInstance) return { ok: false };
+    try {
+      // Switch voice based on language
+      const voice = lang === "es" ? "es-MX-DaliaNeural" : "en-US-GuyNeural";
+      await ttsInstance.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+      const ttsDir = require("path").join(require("os").tmpdir(), "lolcoach_tts");
+      require("fs").mkdirSync(ttsDir, { recursive: true });
+      const result = await ttsInstance.toFile(ttsDir, text);
+      const audioPath = result.audioFilePath;
+      console.log("[TTS] Generated:", audioPath);
+
+      // Play MP3 from main process using Windows Media Player COM object
+      const { exec } = require("child_process");
+      const psCommand = `
+        Add-Type -AssemblyName presentationCore
+        $p = New-Object System.Windows.Media.MediaPlayer
+        $p.Open([Uri]'${audioPath.replace(/\\/g, '/')}')
+        $p.Play()
+        Start-Sleep -Seconds 10
+      `.replace(/\n/g, '; ');
+      exec(`powershell -NoProfile -Command "${psCommand}"`, { windowsHide: true });
+      // Also send to renderer as backup
+      mainWindow?.webContents.send("play-tts-audio", audioPath);
+      return { ok: true };
+    } catch (err) {
+      console.error("[TTS] Speak error:", err);
+      return { ok: false };
+    }
+  });
+
   // ── Riot API proxy calls ──
   ipcMain.handle("riot-api-fetch", async (_event, endpoint: string) => {
     try {
@@ -580,6 +638,7 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   registerGlobalShortcuts();
+  initTTS();
 });
 
 app.on("window-all-closed", () => {

@@ -114,10 +114,14 @@ export async function getCoachingAdvice(
     const available = await isBackendAvailable();
     if (available) {
       const response = await backendFetch<AICoachingResponse>('/api/coaching/advice', {
-        activePlayer: gameState.activePlayer,
-        allPlayers: gameState.allPlayers,
-        events: gameState.events,
-        gameData: gameState.gameData,
+        game_state: {
+          activePlayer: gameState.activePlayer,
+          allPlayers: gameState.allPlayers,
+          events: gameState.events,
+          gameData: gameState.gameData,
+        },
+        player_name: gameState.activePlayer.summonerName,
+        game_time: gameState.gameData.gameTime,
       });
 
       return response.tips.map((t) => makeTip(t.message, t.priority, t.category));
@@ -273,10 +277,12 @@ export async function generatePostGameCoaching(
       const response = await backendFetch<AIPostGameResponse>(
         '/api/coaching/post-game',
         {
-          activePlayer: gameData.activePlayer,
-          allPlayers: gameData.allPlayers,
-          events: gameData.events,
-          gameData: gameData.gameData,
+          game_data: {
+            activePlayer: gameData.activePlayer,
+            allPlayers: gameData.allPlayers,
+            gameData: gameData.gameData,
+          },
+          events_history: gameData.events.Events,
         }
       );
       return {

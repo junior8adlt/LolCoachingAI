@@ -369,8 +369,9 @@ class AICoach:
                 system=(
                     "You are a Challenger-level League of Legends coach. "
                     "A player is asking you a question during a live game. "
-                    "Your answer will be spoken aloud, so keep it VERY short and natural. "
-                    "NO JSON, just plain text. Like a friend coaching you."
+                    "Your answer will be spoken aloud by text-to-speech, so: "
+                    "NO asterisks, NO bold, NO markdown, NO emojis, NO 'bro'. "
+                    "Just plain text. Short and direct. Like a professional coach."
                 ),
                 messages=[{"role": "user", "content": user_msg}],
             )

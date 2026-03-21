@@ -90,7 +90,6 @@ interface BannerState {
 
 export function CoachBanner() {
   const coachingTips = useGameStore((s) => s.coachingTips);
-  const dismissTip = useGameStore((s) => s.dismissTip);
   const activePlayer = useGameStore((s) => s.activePlayer);
   const gameData = useGameStore((s) => s.gameData);
 
@@ -101,40 +100,44 @@ export function CoachBanner() {
     exiting: false,
   });
 
-  const shownTips = useRef(new Set<string>());
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const indexRef = useRef(0);
 
-  // Find the latest active tip we haven't shown yet
-  const activeTips = coachingTips.filter((t) => !t.dismissed && !shownTips.current.has(t.id));
-  const latestTip = activeTips.length > 0 ? activeTips[activeTips.length - 1] : null;
+  // All active tips (not dismissed)
+  const activeTips = coachingTips.filter((t) => !t.dismissed);
 
+  // Rotation: cycle through tips every 8s
   useEffect(() => {
-    if (!latestTip || banner.visible) return;
+    if (activeTips.length === 0) {
+      setBanner({ tip: null, intent: 'info', visible: false, exiting: false });
+      return;
+    }
 
-    // Show this tip
-    shownTips.current.add(latestTip.id);
-    const intent = getIntent(latestTip);
+    // Show first tip immediately
+    const showTip = () => {
+      if (activeTips.length === 0) return;
+      const idx = indexRef.current % activeTips.length;
+      const tip = activeTips[idx];
+      const intent = getIntent(tip);
+      setBanner({ tip, intent, visible: true, exiting: false });
+      indexRef.current++;
+    };
 
-    setBanner({ tip: latestTip, intent, visible: true, exiting: false });
+    showTip();
 
-    // Clear previous timer
-    if (timerRef.current) clearTimeout(timerRef.current);
-
-    // Short duration: 3s normal, 4s danger (coach says it fast, player glances)
-    const duration = intent === 'danger' ? 4000 : 3000;
-    timerRef.current = setTimeout(() => {
+    // Rotate every 8s
+    timerRef.current = setInterval(() => {
+      // Brief exit animation
       setBanner((prev) => ({ ...prev, exiting: true }));
-      // Remove after fade animation
       setTimeout(() => {
-        setBanner({ tip: null, intent: 'info', visible: false, exiting: false });
-        dismissTip(latestTip.id);
-      }, 500);
-    }, duration);
+        showTip();
+      }, 400);
+    }, 8000);
 
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [latestTip?.id, banner.visible, dismissTip]);
+  }, [activeTips.length]);
 
   if (!banner.tip || !banner.visible) return null;
 
@@ -228,7 +231,7 @@ export function CoachBanner() {
         <div
           className={`h-full ${s.stripe} opacity-40`}
           style={{
-            animation: `coach-progress ${banner.intent === 'danger' ? '4' : '3'}s linear forwards`,
+            animation: `coach-progress ${banner.intent === 'danger' ? '6' : '8'}s linear forwards`,
           }}
         />
       </div>

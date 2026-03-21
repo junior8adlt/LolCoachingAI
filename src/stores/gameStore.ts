@@ -110,19 +110,20 @@ export const useGameStore = create<GameStore>((set) => ({
       );
       if (isDuplicate) return state;
 
-      // Block same CATEGORY to prevent repetitive coaching
-      // These are generous because the priority engine also throttles
+      // Block same CATEGORY - priority engine ALSO blocks by topic
+      // Both layers together prevent any repetition
       const CATEGORY_COOLDOWNS: Record<string, number> = {
-        farming: 180000,       // 3min between farm tips
-        recall: 90000,         // 1.5min between recall tips
-        positioning: 120000,   // 2min between positioning tips
-        matchup: 180000,       // 3min between matchup tips
-        jungle: 90000,         // 1.5min between jungle warnings
-        vision: 120000,        // 2min between vision tips
-        trading: 60000,        // 1min between trading tips
-        macro: 120000,         // 2min between macro tips
-        objective: 60000,      // 1min between objective tips
-        general: 90000,
+        farming: 300000,       // 5min - CS tips are the most annoying spam
+        recall: 120000,        // 2min
+        positioning: 180000,   // 3min
+        matchup: 300000,       // 5min
+        jungle: 120000,        // 2min
+        vision: 180000,        // 3min
+        trading: 90000,        // 1.5min
+        macro: 180000,         // 3min
+        objective: 120000,     // 2min
+        teamfight: 60000,      // 1min - teamfight tips are time-sensitive
+        general: 120000,       // 2min
       };
       const cooldown = CATEGORY_COOLDOWNS[tip.category] ?? 20000;
       const categorySpam = state.coachingTips.some(

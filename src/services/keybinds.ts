@@ -11,7 +11,7 @@ const STORAGE_KEY = 'lolcoach_keybinds';
 
 const DEFAULT_KEYBINDS: KeybindMap = {
   toggleOverlay: 'F9',       // F1-F5 are used by LoL
-  pushToTalk: 'Mouse5',
+  pushToTalk: 'F8',
   toggleVoice: 'F10',
 };
 

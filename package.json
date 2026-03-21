@@ -15,6 +15,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@tkomde/iohook": "^1.1.7",
+    "msedge-tts": "^2.0.4",
     "node-screenshots": "^0.2.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -7,6 +7,7 @@ import { PostGameReport } from './PostGameReport';
 import { VoiceControl } from './VoiceControl';
 import { DraggablePanel } from './DraggablePanel';
 import { MapPressureBar } from './MapPressureBar';
+import { useClickThrough } from '../hooks/useClickThrough';
 import { EnemyThreatList } from './EnemyThreatList';
 import { AIThinkingPanel } from './AIThinkingPanel';
 
@@ -14,14 +15,17 @@ export function Overlay() {
   const gamePhase = useGameStore((s) => s.gamePhase);
   const postGameAnalysis = useGameStore((s) => s.postGameAnalysis);
   const [showDebug, setShowDebug] = useState(false);
+  const { disableClickThrough, enableClickThrough } = useClickThrough();
 
   return (
     <div className="absolute inset-0 pointer-events-none">
 
       {/* ═══ THE COACH ═══ */}
-      {/* Center-top: The main coaching banner — BIG, temporary, color-coded */}
+      {/* Center-top: The main coaching banner — BIG, temporary, color-coded, DRAGGABLE */}
       <div className="absolute top-[8%] left-1/2 -translate-x-1/2 w-full max-w-[520px] px-4">
-        <CoachBanner />
+        <DraggablePanel id="coach-banner">
+          <CoachBanner />
+        </DraggablePanel>
       </div>
 
       {/* ═══ AMBIENT MICRO-WIDGETS ═══ */}
@@ -42,8 +46,12 @@ export function Overlay() {
         </DraggablePanel>
       </div>
 
-      {/* Right edge: Voice control */}
-      <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-auto">
+      {/* Right edge: Voice control - CLICKABLE (disables click-through on hover) */}
+      <div
+        className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-auto"
+        onMouseEnter={disableClickThrough}
+        onMouseLeave={enableClickThrough}
+      >
         <VoiceControl />
       </div>
 

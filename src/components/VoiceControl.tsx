@@ -4,6 +4,7 @@ import {
   stopListening,
   onVoiceInputStateChange,
   getVoiceInputState,
+  sendTextQuestion,
 } from '../services/voiceInput';
 import {
   isVoiceEnabled,
@@ -12,7 +13,6 @@ import {
 import { t } from '../services/i18n';
 import {
   getKeybinds,
-  getKeybindLabel,
   setKeybind,
   matchesKeybind,
   mouseButtonToName,
@@ -27,6 +27,8 @@ export function VoiceControl() {
   const [ttsEnabled, setTtsEnabled] = useState(isVoiceEnabled());
   const [_isHolding, setIsHolding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [chatInput, setChatInput] = useState('');
   const [keybinds, setKeybindsState] = useState(getKeybinds());
   const holdingRef = useRef(false);
 
@@ -83,54 +85,20 @@ export function VoiceControl() {
     });
   }, []);
 
-  // Keyboard handler
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    const name = keyEventToName(e);
-
-    if (matchesKeybind('pushToTalk', name) && !holdingRef.current) {
-      e.preventDefault();
-      holdingRef.current = true;
-      setIsHolding(true);
-      startListening();
-    }
-    if (matchesKeybind('toggleVoice', name)) {
-      e.preventDefault();
-      const next = !isVoiceEnabled();
-      setVoiceEnabled(next);
-      setTtsEnabled(next);
-    }
+  // PTT is handled ONLY by iohook global keys (above).
+  // NO local keyboard handlers for PTT - they conflict with iohook.
+  // Only toggleVoice uses local handler as backup.
+  const handleKeyDown = useCallback((_e: KeyboardEvent) => {
+    // All PTT handled by iohook global keys
   }, []);
 
-  const handleKeyUp = useCallback((e: KeyboardEvent) => {
-    const name = keyEventToName(e);
-    if (matchesKeybind('pushToTalk', name)) {
-      e.preventDefault();
-      holdingRef.current = false;
-      setIsHolding(false);
-      stopListening();
-    }
+  const handleKeyUp = useCallback((_e: KeyboardEvent) => {
+    // All PTT handled by iohook global keys
   }, []);
 
-  // Mouse handler for mouse button binds
-  const handleMouseDown = useCallback((e: MouseEvent) => {
-    const name = mouseButtonToName(e.button);
-    if (name && matchesKeybind('pushToTalk', name) && !holdingRef.current) {
-      e.preventDefault();
-      holdingRef.current = true;
-      setIsHolding(true);
-      startListening();
-    }
-  }, []);
-
-  const handleMouseUp = useCallback((e: MouseEvent) => {
-    const name = mouseButtonToName(e.button);
-    if (name && matchesKeybind('pushToTalk', name)) {
-      e.preventDefault();
-      holdingRef.current = false;
-      setIsHolding(false);
-      stopListening();
-    }
-  }, []);
+  // Mouse PTT also handled by iohook
+  const handleMouseDown = useCallback((_e: MouseEvent) => {}, []);
+  const handleMouseUp = useCallback((_e: MouseEvent) => {}, []);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -161,9 +129,25 @@ export function VoiceControl() {
     <div className="flex flex-col items-center gap-1.5 relative">
       {/* Mic button */}
       <button
-        onMouseDown={() => { holdingRef.current = true; setIsHolding(true); startListening(); }}
-        onMouseUp={() => { holdingRef.current = false; setIsHolding(false); stopListening(); }}
-        onMouseLeave={() => { if (holdingRef.current) { holdingRef.current = false; setIsHolding(false); stopListening(); } }}
+        onClick={() => {
+          if (holdingRef.current) {
+            holdingRef.current = false;
+            setIsHolding(false);
+            stopListening();
+          } else {
+            holdingRef.current = true;
+            setIsHolding(true);
+            startListening();
+            // Auto-stop after 15s
+            setTimeout(() => {
+              if (holdingRef.current) {
+                holdingRef.current = false;
+                setIsHolding(false);
+                stopListening();
+              }
+            }, 15000);
+          }
+        }}
         className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 ${
           isListening
             ? 'bg-gaming-neon-red/30 border-2 border-gaming-neon-red shadow-neon animate-pulse-neon'
@@ -187,16 +171,23 @@ export function VoiceControl() {
         )}
       </button>
 
-      {/* Keybind label */}
+      {/* Status + text input toggle */}
       <span className={`text-[8px] data-text ${
         isListening ? 'text-gaming-neon-red' : isProcessing ? 'text-gaming-neon-purple' : 'text-gray-600'
       }`}>
-        {isListening
-          ? t('ui_mic_listening')
-          : isProcessing
-          ? t('ui_mic_processing')
-          : getKeybindLabel('pushToTalk')}
+        {isListening ? 'Escuchando...' : isProcessing ? 'Pensando...' : 'Click para hablar'}
       </span>
+
+      {/* Text chat button (fallback when mic doesn't work) */}
+      <button
+        onClick={() => setShowChat(!showChat)}
+        className="w-8 h-8 rounded flex items-center justify-center text-gray-500 hover:text-gaming-neon-blue hover:bg-gaming-surface/50 transition-colors"
+        title="Escribir al coach"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+        </svg>
+      </button>
 
       {/* TTS toggle */}
       <button
@@ -240,6 +231,52 @@ export function VoiceControl() {
           <p className="text-[11px] text-gray-200 italic">
             "{transcript}"
           </p>
+        </div>
+      )}
+
+      {/* Chat box (type questions when mic doesn't work) */}
+      {showChat && (
+        <div className="absolute right-12 top-0 glass-panel-accent p-3 w-[260px] animate-fade-in z-50">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-gaming-neon-blue font-bold uppercase tracking-wider">
+              Pregunta al Coach
+            </span>
+            <button onClick={() => setShowChat(false)} className="text-gray-500 hover:text-white text-[14px]">x</button>
+          </div>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            if (chatInput.trim()) {
+              sendTextQuestion(chatInput.trim());
+              setChatInput('');
+              setShowChat(false);
+            }
+          }}>
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder="Ej: que me buildeo?"
+              className="w-full px-2 py-1.5 rounded bg-gaming-surface text-[11px] text-gray-200 border border-gaming-border/40 focus:border-gaming-neon-blue/50 outline-none placeholder:text-gray-600"
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="w-full mt-2 px-3 py-1 rounded text-[10px] font-medium bg-gaming-neon-blue/20 text-gaming-neon-blue border border-gaming-neon-blue/30 hover:bg-gaming-neon-blue/30 transition-colors"
+            >
+              Enviar
+            </button>
+          </form>
+          <div className="mt-2 space-y-1">
+            {['Como voy?', 'Que buildeo?', 'Deberia pelear?', 'Como es el matchup?'].map((q) => (
+              <button
+                key={q}
+                onClick={() => { sendTextQuestion(q); setShowChat(false); }}
+                className="block w-full text-left px-2 py-0.5 rounded text-[9px] text-gray-400 hover:text-gaming-neon-blue hover:bg-gaming-surface/50 transition-colors"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
